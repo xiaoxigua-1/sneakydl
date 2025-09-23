@@ -1,0 +1,17 @@
+[package]
+name = "sneakydl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+
+[features]
+default = ["reqwest/stream", "tokio/full"]
+socket = ["reqwest/socks"]
+cookies = ["reqwest/cookies"]
+auth = ["reqwest/multipart"]

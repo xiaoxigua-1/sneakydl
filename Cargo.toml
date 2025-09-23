@@ -1,0 +1,15 @@
+[workspace]
+members = ["./crates/sneakydl/"]
+
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+reqwest = "0.12.23"
+bytes = "1.10.1"
+tokio = { version = "1.47.1", features = ["full"] }
+tokio-stream = "0.1.17"
+futures-util = "0.3.31"
