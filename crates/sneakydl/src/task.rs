@@ -1,9 +1,13 @@
 use bytes::Bytes;
-use futures_util::StreamExt;
-use tokio::sync::{
-    mpsc,
-    watch::{Receiver, Sender, channel},
+use log::{debug, trace};
+use tokio::{
+    sync::{
+        mpsc,
+        watch::{Receiver, Sender, channel},
+    },
+    task::JoinHandle,
 };
+use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use std::{mem::take, ops::Range, pin::pin, sync::Arc};
@@ -21,7 +25,7 @@ pub struct TaskMetadata {
     pub url: &'static str,
     pub request_metadata: RequestMetadata,
     /// half-open byte range [start, end). end == start => unknown/streaming
-    pub range: Range<u64>,
+    pub range: Option<Range<u64>>,
     pub max_retries: u32,
 }
 
@@ -55,7 +59,7 @@ impl TaskMetadata {
         task_id: u64,
         url: &'static str,
         request_metadata: RequestMetadata,
-        range: Range<u64>,
+        range: Option<Range<u64>>,
         max_retries: u32,
     ) -> Self {
         Self {
@@ -105,30 +109,41 @@ impl<C: HttpClient> Task<C> {
 
     pub async fn job(&mut self) -> Result<()> {
         self.update_status(TaskStatus::Downloading)?;
+        debug!(
+            "Download [{}] - Task [{}] starting download",
+            self.metadata.download_id, self.metadata.task_id
+        );
 
         let metadata = self.metadata.clone();
         let mut bytes: Vec<Bytes> = vec![];
         let mut total_bytes_size: u64 = 0;
         let mut stream = pin!(
             self.http
-                .get_range(
-                    metadata.url,
-                    metadata.request_metadata,
-                    Some(metadata.range),
-                )
+                .get_range(metadata.url, metadata.request_metadata, metadata.range,)
                 .await
                 .map_err(SneakydlError::RequestError)?
         );
+        let mut storage_notifys: Vec<JoinHandle<Result<()>>> = vec![];
+
+        debug!(
+            "Download [{}] - Task [{}] request sent successfully",
+            self.metadata.download_id, self.metadata.task_id
+        );
 
         while let Some(item) = stream.next().await {
-            let status_receiver = self.runtime.status.clone().1;
-            match *status_receiver.borrow() {
+            let status = self.runtime.status.1.borrow().clone();
+
+            match status {
                 TaskStatus::Downloading => {
                     let item = item.map_err(SneakydlError::RequestError)?;
                     let item_len = item.len() as u64;
 
                     total_bytes_size += item_len;
                     bytes.push(item);
+                    trace!(
+                        "Download [{}] - Task [{}] processing chunk of {} bytes",
+                        self.metadata.download_id, self.metadata.task_id, item_len
+                    );
 
                     if total_bytes_size > 3000 {
                         // write storage
@@ -138,8 +153,12 @@ impl<C: HttpClient> Task<C> {
                             take(&mut bytes),
                         );
 
+                        trace!(
+                            "Download [{}] - Task [{}] sending WriteRequest to StorageWorker ({} bytes)",
+                            self.metadata.download_id, self.metadata.task_id, item_len
+                        );
                         storage_notify.send().await?;
-                        storage_notify.wait_done().await?;
+                        storage_notifys.push(tokio::spawn(storage_notify.wait_done()));
 
                         self.runtime.completed_bytes += total_bytes_size;
                         total_bytes_size = 0;
@@ -157,6 +176,20 @@ impl<C: HttpClient> Task<C> {
             }
         }
 
+        debug!(
+            "Download [{}] - Task [{}] WriteRequest sent, awaiting StorageWorker completion",
+            self.metadata.download_id, self.metadata.task_id
+        );
+        for notify in storage_notifys {
+            notify
+                .await
+                .map_err(|_| SneakydlError::NotifyRecvFailed)??;
+        }
+
+        debug!(
+            "Download [{}] - Task [{}] completed ({} bytes)",
+            self.metadata.download_id, self.metadata.task_id, self.runtime.completed_bytes
+        );
         self.update_status(TaskStatus::Completed)
     }
 

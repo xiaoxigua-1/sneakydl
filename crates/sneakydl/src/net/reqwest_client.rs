@@ -2,16 +2,31 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
+use futures_core::stream::BoxStream;
 use reqwest::{
     Client, Method,
     header::{ACCEPT_RANGES, CONTENT_LENGTH, RANGE},
 };
+use tokio_stream::StreamExt;
 
 use crate::net::{HttpClient, RequestMetadata};
 
 pub struct ReqwestClient {
     client: Client,
+}
+
+impl ReqwestClient {
+    pub fn new(client: Client) -> Self {
+        Self { client }
+    }
+}
+
+impl Default for ReqwestClient {
+    fn default() -> Self {
+        Self {
+            client: Client::new(),
+        }
+    }
 }
 
 #[async_trait]
@@ -53,6 +68,8 @@ impl HttpClient for ReqwestClient {
 
         let response = request.send().await?;
 
-        Ok(response.bytes_stream().map_err(anyhow::Error::from).boxed())
+        Ok(Box::pin(
+            response.bytes_stream().map(|r| r.map_err(|e| e.into())),
+        ))
     }
 }

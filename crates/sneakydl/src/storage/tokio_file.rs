@@ -14,6 +14,12 @@ pub struct TokioStorage {
     path: &'static str,
 }
 
+impl TokioStorage {
+    pub fn new(path: &'static str) -> Self {
+        Self { path }
+    }
+}
+
 #[async_trait]
 impl Storage for TokioStorage {
     type Dest = File;

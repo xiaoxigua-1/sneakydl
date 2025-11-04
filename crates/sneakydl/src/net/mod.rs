@@ -4,7 +4,7 @@ use std::{collections::HashMap, ops::Range};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::Stream;
+use futures_core::Stream;
 
 #[derive(Debug, Clone)]
 pub struct HeadResponse {
@@ -16,6 +16,12 @@ pub struct HeadResponse {
 pub struct RequestMetadata {
     method: &'static str,
     headers: HashMap<String, String>,
+}
+
+impl RequestMetadata {
+    pub fn new(method: &'static str, headers: HashMap<String, String>) -> Self {
+        Self { method, headers }
+    }
 }
 
 #[async_trait]
