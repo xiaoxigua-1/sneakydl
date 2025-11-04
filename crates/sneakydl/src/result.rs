@@ -1,17 +1,28 @@
-use tokio::{
-    io,
-    sync::{mpsc, watch},
-};
+use tokio::sync::{mpsc, watch};
 
-use crate::downloader::job::DownloadStatus;
+use crate::{storage::WriteRequest, task::TaskStatus};
 
 pub type Result<T> = std::result::Result<T, SneakydlError>;
 
 #[derive(Debug)]
 pub enum SneakydlError {
     Config(&'static str),
-    AddQueueError(mpsc::error::SendError<u64>),
-    NotifyTaskStatusError(watch::error::SendError<DownloadStatus>),
-    ReqwestError(reqwest::Error),
-    IoError(io::Error),
+
+    // HttpClient
+    RequestError(anyhow::Error),
+
+    // Storage
+    IoError(anyhow::Error),
+
+    // Storage Manager
+    StorageRequestSendFailed(mpsc::error::SendError<WriteRequest>),
+    StorageNoRequestFailed,
+
+    // Storage notify
+    NotifySendFailed,
+    NotifyRecvFailed,
+
+    // Task
+    TaskUpdateStatusSendFailed(watch::error::SendError<TaskStatus>),
+    TaskUpdateStatusRecvFailed,
 }

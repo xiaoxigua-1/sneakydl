@@ -9,6 +9,10 @@ tokio.workspace = true
 tokio-stream.workspace = true
 futures-util.workspace = true
 bytes.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
 
 [features]
 default = ["reqwest/stream", "tokio/full"]

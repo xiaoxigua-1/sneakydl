@@ -1,6 +1,9 @@
 pub mod config;
-pub mod downloader;
+// pub mod job;
+pub mod net;
 pub mod result;
+pub mod storage;
+pub mod task;
 
 use std::sync::Arc;
 

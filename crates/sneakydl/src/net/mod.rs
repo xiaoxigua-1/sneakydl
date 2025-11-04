@@ -1,0 +1,33 @@
+pub mod reqwest_client;
+
+use std::{collections::HashMap, ops::Range};
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures_util::Stream;
+
+#[derive(Debug, Clone)]
+pub struct HeadResponse {
+    pub accept_ranges: bool,
+    pub content_length: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestMetadata {
+    method: &'static str,
+    headers: HashMap<String, String>,
+}
+
+#[async_trait]
+pub trait HttpClient: Send + Sync + 'static {
+    type Iter: Stream<Item = anyhow::Result<Bytes>>;
+
+    async fn head(&self, url: &str) -> anyhow::Result<HeadResponse>;
+
+    async fn get_range(
+        &self,
+        url: &str,
+        metadata: RequestMetadata,
+        range: Option<Range<u64>>,
+    ) -> anyhow::Result<Self::Iter>;
+}
