@@ -155,7 +155,7 @@ impl<C: HttpClient> Task<C> {
 
                         trace!(
                             "Download [{}] - Task [{}] sending WriteRequest to StorageWorker ({} bytes)",
-                            self.metadata.download_id, self.metadata.task_id, item_len
+                            self.metadata.download_id, self.metadata.task_id, total_bytes_size
                         );
                         storage_notify.send().await?;
                         storage_notifys.push(tokio::spawn(storage_notify.wait_done()));

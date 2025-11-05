@@ -1,3 +1,4 @@
+#[cfg(feature = "reqwest")]
 pub mod reqwest_client;
 
 use std::{collections::HashMap, ops::Range};
@@ -14,8 +15,8 @@ pub struct HeadResponse {
 
 #[derive(Debug, Clone)]
 pub struct RequestMetadata {
-    method: &'static str,
-    headers: HashMap<String, String>,
+    pub method: &'static str,
+    pub headers: HashMap<String, String>,
 }
 
 impl RequestMetadata {
