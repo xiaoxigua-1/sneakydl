@@ -49,13 +49,13 @@ impl HttpClient for ReqwestClient {
         })
     }
 
-    async fn get_range(
+    async fn send_request(
         &self,
-        url: &str,
+        url: String,
         metadata: RequestMetadata,
         range: Option<std::ops::Range<u64>>,
     ) -> anyhow::Result<Self::Iter> {
-        let method = Method::from_str(metadata.method)?;
+        let method = Method::from_str(&metadata.method.to_string())?;
         let mut request = self.client.request(method, url);
 
         if let Some(range) = range {

@@ -7,16 +7,21 @@ edition.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 futures-core.workspace = true
+async-trait.workspace = true
+
 bytes.workspace = true
 uuid.workspace = true
-async-trait.workspace = true
+
 anyhow.workspace = true
 log.workspace = true
 
-reqwest.workspace = true
+strum_macros.workspace = true
+
+reqwest = { workspace = true, optional = true }
+
 [features]
 default = ["tokio/full"]
-reqwest = ["reqwest/stream"]
+reqwest-client = ["reqwest", "reqwest/stream"]
 
 [dev-dependencies]
 env_logger.workspace = true

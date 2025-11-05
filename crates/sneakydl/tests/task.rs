@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::{Stream, stream::BoxStream};
 use sneakydl::{
-    net::{HeadResponse, HttpClient, RequestMetadata},
+    net::{HeadResponse, HttpClient, RequestMetadata, RequestMethod},
     storage::{Storage, StorageWorker},
     task::{Task, TaskMetadata},
 };
@@ -46,9 +46,9 @@ impl HttpClient for VoidClient {
         })
     }
 
-    async fn get_range(
+    async fn send_request(
         &self,
-        _: &str,
+        _: String,
         _: RequestMetadata,
         _: Option<std::ops::Range<u64>>,
     ) -> anyhow::Result<Self::Iter> {
@@ -94,17 +94,8 @@ async fn task_test() {
     let mut storage_worker = StorageWorker::new(VoidStorage, 100);
 
     let download_id = Uuid::new_v4();
-    // Example url
-    let url = "http://localhost";
-    let request_metadata = RequestMetadata::new("GET", HashMap::new());
-    let metadata = TaskMetadata {
-        task_id: 0,
-        download_id,
-        url,
-        request_metadata,
-        range: None,
-        max_retries: 1,
-    };
+    let request_metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
+    let metadata = TaskMetadata::new(download_id, 0, String::new(), request_metadata);
     let request_tx = storage_worker.get_request_tx();
     let mut task = Task::new(void_client, request_tx, metadata);
 

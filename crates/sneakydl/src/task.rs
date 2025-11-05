@@ -22,16 +22,23 @@ use crate::{
 pub struct TaskMetadata {
     pub task_id: u64,
     pub download_id: Uuid,
-    pub url: &'static str,
+    pub url: String,
     pub request_metadata: RequestMetadata,
     /// half-open byte range [start, end). end == start => unknown/streaming
     pub range: Option<Range<u64>>,
     pub max_retries: u32,
+    pub write_buffer_limit: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskStatusNotify {
+    tx: Arc<Sender<TaskStatus>>,
+    rx: Receiver<TaskStatus>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TaskRuntime {
-    pub status: (Sender<TaskStatus>, Receiver<TaskStatus>),
+    pub status: TaskStatusNotify,
     pub download_bytes: u64,
     pub completed_bytes: u64,
 }
@@ -57,18 +64,40 @@ impl TaskMetadata {
     pub fn new(
         download_id: Uuid,
         task_id: u64,
-        url: &'static str,
+        url: String,
         request_metadata: RequestMetadata,
-        range: Option<Range<u64>>,
-        max_retries: u32,
     ) -> Self {
         Self {
             download_id,
             task_id,
             url,
             request_metadata,
-            range,
-            max_retries,
+            range: None,
+            max_retries: 0,
+            write_buffer_limit: 1024 * 1024,
+        }
+    }
+
+    pub fn range(&mut self, range: Range<u64>) {
+        self.range = Some(range);
+    }
+
+    pub fn max_retries(&mut self, max_retries: u32) {
+        self.max_retries = max_retries;
+    }
+
+    pub fn write_buffer_limit(&mut self, write_buffer_limit: u64) {
+        self.write_buffer_limit = write_buffer_limit;
+    }
+}
+
+impl Default for TaskStatusNotify {
+    fn default() -> Self {
+        let (tx, rx) = channel(TaskStatus::Pending);
+
+        Self {
+            tx: Arc::new(tx),
+            rx,
         }
     }
 }
@@ -84,7 +113,7 @@ impl<C: HttpClient> Task<C> {
             storage_request_tx,
             metadata,
             runtime: TaskRuntime {
-                status: channel(TaskStatus::Pending),
+                status: TaskStatusNotify::default(),
                 download_bytes: 0,
                 completed_bytes: 0,
             },
@@ -119,7 +148,7 @@ impl<C: HttpClient> Task<C> {
         let mut total_bytes_size: u64 = 0;
         let mut stream = pin!(
             self.http
-                .get_range(metadata.url, metadata.request_metadata, metadata.range,)
+                .send_request(metadata.url, metadata.request_metadata, metadata.range,)
                 .await
                 .map_err(SneakydlError::RequestError)?
         );
@@ -131,7 +160,7 @@ impl<C: HttpClient> Task<C> {
         );
 
         while let Some(item) = stream.next().await {
-            let status = self.runtime.status.1.borrow().clone();
+            let status = self.runtime.status.rx.borrow().clone();
 
             match status {
                 TaskStatus::Downloading => {
@@ -145,7 +174,7 @@ impl<C: HttpClient> Task<C> {
                         self.metadata.download_id, self.metadata.task_id, item_len
                     );
 
-                    if total_bytes_size > 3000 {
+                    if total_bytes_size > self.metadata.write_buffer_limit {
                         // write storage
                         let mut storage_notify = StorageNotifier::new(
                             self.storage_request_tx.clone(),
@@ -168,7 +197,7 @@ impl<C: HttpClient> Task<C> {
                 _ => {
                     self.runtime
                         .status
-                        .1
+                        .rx
                         .changed()
                         .await
                         .map_err(|_| SneakydlError::TaskUpdateStatusRecvFailed)?;
@@ -196,7 +225,7 @@ impl<C: HttpClient> Task<C> {
     fn update_status(&self, status: TaskStatus) -> Result<()> {
         self.runtime
             .status
-            .0
+            .tx
             .send(status)
             .map_err(SneakydlError::TaskUpdateStatusSendFailed)
     }
