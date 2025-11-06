@@ -15,7 +15,7 @@ pub enum SneakydlError {
     IoError(anyhow::Error),
 
     // Storage Manager
-    StorageRequestSendFailed(mpsc::error::SendError<WriteRequest>),
+    StorageRequestSendFailed(mpsc::error::SendError<Option<WriteRequest>>),
     StorageNoRequestFailed,
 
     // Storage notify

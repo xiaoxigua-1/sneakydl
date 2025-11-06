@@ -40,7 +40,6 @@ pub struct TaskStatusNotify {
 pub struct TaskRuntime {
     pub status: TaskStatusNotify,
     pub download_bytes: u64,
-    pub completed_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +54,7 @@ pub enum TaskStatus {
 #[derive(Debug)]
 pub struct Task<C: HttpClient> {
     http: Arc<C>,
-    storage_request_tx: Arc<mpsc::Sender<WriteRequest>>,
+    storage_request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
     metadata: TaskMetadata,
     runtime: TaskRuntime,
 }
@@ -105,7 +104,7 @@ impl Default for TaskStatusNotify {
 impl<C: HttpClient> Task<C> {
     pub fn new(
         http: Arc<C>,
-        storage_request_tx: Arc<mpsc::Sender<WriteRequest>>,
+        storage_request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
         metadata: TaskMetadata,
     ) -> Self {
         Self {
@@ -115,7 +114,6 @@ impl<C: HttpClient> Task<C> {
             runtime: TaskRuntime {
                 status: TaskStatusNotify::default(),
                 download_bytes: 0,
-                completed_bytes: 0,
             },
         }
     }
@@ -176,23 +174,14 @@ impl<C: HttpClient> Task<C> {
 
                     if total_bytes_size > self.metadata.write_buffer_limit {
                         // write storage
-                        let mut storage_notify = StorageNotifier::new(
-                            self.storage_request_tx.clone(),
-                            self.runtime.completed_bytes,
-                            take(&mut bytes),
+                        storage_notifys.push(
+                            self.create_storage_notify(take(&mut bytes), total_bytes_size)
+                                .await?,
                         );
 
-                        trace!(
-                            "Download [{}] - Task [{}] sending WriteRequest to StorageWorker ({} bytes)",
-                            self.metadata.download_id, self.metadata.task_id, total_bytes_size
-                        );
-                        storage_notify.send().await?;
-                        storage_notifys.push(tokio::spawn(storage_notify.wait_done()));
-
-                        self.runtime.completed_bytes += total_bytes_size;
+                        self.runtime.download_bytes += total_bytes_size;
                         total_bytes_size = 0;
                     }
-                    self.runtime.download_bytes += item_len;
                 }
                 _ => {
                     self.runtime
@@ -203,6 +192,14 @@ impl<C: HttpClient> Task<C> {
                         .map_err(|_| SneakydlError::TaskUpdateStatusRecvFailed)?;
                 }
             }
+        }
+
+        if total_bytes_size != 0 {
+            storage_notifys.push(
+                self.create_storage_notify(take(&mut bytes), total_bytes_size)
+                    .await?,
+            );
+            self.runtime.download_bytes += total_bytes_size;
         }
 
         debug!(
@@ -217,9 +214,28 @@ impl<C: HttpClient> Task<C> {
 
         debug!(
             "Download [{}] - Task [{}] completed ({} bytes)",
-            self.metadata.download_id, self.metadata.task_id, self.runtime.completed_bytes
+            self.metadata.download_id, self.metadata.task_id, self.runtime.download_bytes
         );
         self.update_status(TaskStatus::Completed)
+    }
+
+    async fn create_storage_notify(
+        &self,
+        bytes: Vec<Bytes>,
+        total_bytes_size: u64,
+    ) -> Result<JoinHandle<Result<()>>> {
+        let storage_notify = StorageNotifier::new(
+            self.storage_request_tx.clone(),
+            self.runtime.download_bytes,
+            bytes,
+        );
+
+        trace!(
+            "Download [{}] - Task [{}] sending WriteRequest to StorageWorker ({} bytes)",
+            self.metadata.download_id, self.metadata.task_id, total_bytes_size
+        );
+
+        Ok(tokio::spawn(storage_notify.send_wait_done()))
     }
 
     fn update_status(&self, status: TaskStatus) -> Result<()> {

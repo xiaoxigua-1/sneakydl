@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::result::{Result, SneakydlError};
 
@@ -30,19 +30,22 @@ pub struct WriteRequest {
 
 pub struct StorageNotifier {
     write_request: Option<WriteRequest>,
-    request_tx: Arc<mpsc::Sender<WriteRequest>>,
+    request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
     done_rx: oneshot::Receiver<()>,
 }
 
 pub struct StorageWorker<T: Storage> {
     storage: T,
-    done: Notify,
-    request_rx: mpsc::Receiver<WriteRequest>,
-    request_tx: Arc<mpsc::Sender<WriteRequest>>,
+    request_rx: mpsc::Receiver<Option<WriteRequest>>,
+    request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
 }
 
 impl StorageNotifier {
-    pub fn new(request_tx: Arc<mpsc::Sender<WriteRequest>>, offset: u64, data: Vec<Bytes>) -> Self {
+    pub fn new(
+        request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
+        offset: u64,
+        data: Vec<Bytes>,
+    ) -> Self {
         let (done_tx, done_rx) = oneshot::channel();
 
         Self {
@@ -56,18 +59,11 @@ impl StorageNotifier {
         }
     }
 
-    pub async fn send(&mut self) -> Result<()> {
-        if let Some(req) = self.write_request.take() {
-            self.request_tx
-                .send(req)
-                .await
-                .map_err(SneakydlError::StorageRequestSendFailed)
-        } else {
-            Err(SneakydlError::StorageNoRequestFailed)
-        }
-    }
-
-    pub async fn wait_done(self) -> Result<()> {
+    pub async fn send_wait_done(self) -> Result<()> {
+        self.request_tx
+            .send(self.write_request)
+            .await
+            .map_err(SneakydlError::StorageRequestSendFailed)?;
         self.done_rx
             .await
             .map_err(|_| SneakydlError::NotifyRecvFailed)
@@ -77,11 +73,9 @@ impl StorageNotifier {
 impl<T: Storage> StorageWorker<T> {
     pub fn new(storage: T, request_buff: usize) -> Self {
         let (request_tx, request_rx) = mpsc::channel(request_buff);
-        let done = Notify::new();
 
         Self {
             storage,
-            done,
             request_tx: Arc::new(request_tx),
             request_rx,
         }
@@ -94,31 +88,24 @@ impl<T: Storage> StorageWorker<T> {
             .await
             .map_err(SneakydlError::IoError)?;
 
-        loop {
-            tokio::select! {
-                Some(req) = self.request_rx.recv() => {
-                    self.storage
-                        .write_at(&mut dest, req.offset, req.data)
-                        .await
-                        .map_err(SneakydlError::IoError)?;
-                    req.done_tx
-                        .send(())
-                        .map_err(|_| SneakydlError::NotifySendFailed)?;
-                }
-                _ = self.done.notified() => {
-                    break;
-                }
+        while let Some(req) = self.request_rx.recv().await {
+            if let Some(req) = req {
+                self.storage
+                    .write_at(&mut dest, req.offset, req.data)
+                    .await
+                    .map_err(SneakydlError::IoError)?;
+                req.done_tx
+                    .send(())
+                    .map_err(|_| SneakydlError::NotifySendFailed)?;
+            } else {
+                self.request_rx.close();
             }
         }
 
         Ok(())
     }
 
-    pub async fn done(&self) {
-        self.done.notify_one();
-    }
-
-    pub fn get_request_tx(&self) -> Arc<mpsc::Sender<WriteRequest>> {
+    pub fn get_request_tx(&self) -> Arc<mpsc::Sender<Option<WriteRequest>>> {
         self.request_tx.clone()
     }
 }

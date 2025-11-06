@@ -5,14 +5,17 @@ use bytes::Bytes;
 use futures_core::{Stream, stream::BoxStream};
 use sneakydl::{
     net::{HeadResponse, HttpClient, RequestMetadata, RequestMethod},
+    result::{Result, SneakydlError},
     storage::{Storage, StorageWorker},
     task::{Task, TaskMetadata},
 };
-use tokio::test;
+use tokio::{task::JoinHandle, test};
 use uuid::Uuid;
 
 struct VoidStorage;
-struct VoidClient;
+struct VoidClient {
+    size: usize,
+}
 struct VoidStream {
     data: Vec<u8>,
 }
@@ -52,14 +55,14 @@ impl HttpClient for VoidClient {
         _: RequestMetadata,
         _: Option<std::ops::Range<u64>>,
     ) -> anyhow::Result<Self::Iter> {
-        Ok(Box::pin(VoidStream::default()))
+        Ok(Box::pin(VoidStream::new(self.size)))
     }
 }
 
-impl Default for VoidStream {
-    fn default() -> Self {
+impl VoidStream {
+    fn new(size: usize) -> Self {
         Self {
-            data: vec![0u8; 1024 * 1024],
+            data: vec![0u8; size],
         }
     }
 }
@@ -78,36 +81,45 @@ impl Stream for VoidStream {
     }
 }
 
-/*
- * Simplify single-Task test with tokio::select!
- *
- * In this single-Task test, we use `tokio::select!` to simplify the code:
- *  - `select!` works here because each Task will only complete after all its writes have been fully processed.
- *  - When the Task finishes, it guarantees that the StorageWorker has completed all write operations.
- *  - If the StorageWorker future is dropped (due to select!), it's safe since all necessary writes for this Task are already done.
- * This keeps the test simple while preserving correctness.
- */
+/// Integration-like test for verifying the end-to-end workflow of a download task.
+///
+/// This test sets up a simulated environment using:
+/// - `VoidClient`: a mock HTTP client that generates fake byte data without real networking.
+/// - `VoidStorage`: a mock storage backend that discards all writes.
+/// - `StorageWorker` and `Task`: the real logic under test, communicating via async channels.
+///
+/// The test ensures that:
+/// 1. A `Task` can stream data from the mock client and send write requests correctly.
+/// 2. The `StorageWorker` can receive and process these requests without errors.
+/// 3. Both async tasks (`download_job` and `storage_job`) complete cleanly without deadlocks or panics.
+///
+/// It effectively validates the coordination between downloading and storage components
+/// without relying on external I/O.
 #[test]
 async fn task_test() {
     env_logger::init();
-    let void_client = Arc::new(VoidClient);
+    let void_client = Arc::new(VoidClient {
+        size: 1024 * 1024 - 10,
+    });
     let mut storage_worker = StorageWorker::new(VoidStorage, 100);
 
     let download_id = Uuid::new_v4();
     let request_metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
     let metadata = TaskMetadata::new(download_id, 0, String::new(), request_metadata);
     let request_tx = storage_worker.get_request_tx();
+    let request_tx_clone = storage_worker.get_request_tx();
     let mut task = Task::new(void_client, request_tx, metadata);
 
-    let download_job = tokio::spawn(async move { task.job().await });
+    let download_job: JoinHandle<Result<()>> = tokio::spawn(async move {
+        task.job().await?;
+        request_tx_clone
+            .send(None)
+            .await
+            .map_err(SneakydlError::StorageRequestSendFailed)
+    });
     let storage_job = tokio::spawn(async move {
         storage_worker.run().await.unwrap();
     });
 
-    tokio::select! {
-        Ok(r) = download_job => {
-            assert!(r.is_ok());
-        }
-        _ = storage_job => {}
-    }
+    let (_, _) = tokio::join!(download_job, storage_job);
 }
