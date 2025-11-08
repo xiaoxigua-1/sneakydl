@@ -1,6 +1,9 @@
 use tokio::sync::{mpsc, watch};
 
-use crate::{storage::WriteRequest, task::TaskStatus};
+use crate::{
+    storage::WriteRequest,
+    task::runtime::{ControlCommand, TaskStatus},
+};
 
 pub type Result<T> = std::result::Result<T, SneakydlError>;
 
@@ -13,16 +16,14 @@ pub enum SneakydlError {
 
     // Storage
     IoError(anyhow::Error),
-
-    // Storage Manager
-    StorageRequestSendFailed(mpsc::error::SendError<Option<WriteRequest>>),
-    StorageNoRequestFailed,
-
-    // Storage notify
-    NotifySendFailed,
-    NotifyRecvFailed,
+    WriteRequestSendFailed(mpsc::error::SendError<Option<WriteRequest>>),
+    WriteRequestReceiveFailed,
+    WriteResponseSendFailed,
+    WriteResponseReceiveFailed,
 
     // Task
+    TaskUpdateControlCommandSendFailed(watch::error::SendError<ControlCommand>),
+    TaskUpdateControlCommandRecvFailed,
     TaskUpdateStatusSendFailed(watch::error::SendError<TaskStatus>),
     TaskUpdateStatusRecvFailed,
 }

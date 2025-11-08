@@ -7,9 +7,9 @@ use sneakydl::{
     net::{HeadResponse, HttpClient, RequestMetadata, RequestMethod},
     result::{Result, SneakydlError},
     storage::{Storage, StorageWorker},
-    task::{Task, TaskMetadata},
+    task::{Task, metadata::TaskMetadata, runtime::TaskStatus},
 };
-use tokio::{task::JoinHandle, test};
+use tokio::{sync::watch, task::JoinHandle, test};
 use uuid::Uuid;
 
 struct VoidStorage;
@@ -106,20 +106,23 @@ async fn task_test() {
     let download_id = Uuid::new_v4();
     let request_metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
     let metadata = TaskMetadata::new(download_id, 0, String::new(), request_metadata);
+    let (status_tx, status_rx) = watch::channel(TaskStatus::Pending);
     let request_tx = storage_worker.get_request_tx();
     let request_tx_clone = storage_worker.get_request_tx();
-    let mut task = Task::new(void_client, request_tx, metadata);
+    let mut task = Task::new(void_client, request_tx, Arc::new(status_tx), metadata);
 
     let download_job: JoinHandle<Result<()>> = tokio::spawn(async move {
         task.job().await?;
         request_tx_clone
             .send(None)
             .await
-            .map_err(SneakydlError::StorageRequestSendFailed)
+            .map_err(SneakydlError::WriteRequestSendFailed)
     });
     let storage_job = tokio::spawn(async move {
         storage_worker.run().await.unwrap();
     });
 
     let (_, _) = tokio::join!(download_job, storage_job);
+
+    drop(status_rx);
 }

@@ -1,55 +1,25 @@
+pub mod metadata;
+pub mod runtime;
+
 use bytes::Bytes;
 use log::{debug, trace};
 use tokio::{
-    sync::{
-        mpsc,
-        watch::{Receiver, Sender, channel},
-    },
+    sync::{mpsc, watch},
     task::JoinHandle,
 };
 use tokio_stream::StreamExt;
-use uuid::Uuid;
 
-use std::{mem::take, ops::Range, pin::pin, sync::Arc};
+use std::{mem::take, pin::pin, sync::Arc};
 
 use crate::{
-    net::{HttpClient, RequestMetadata},
+    net::HttpClient,
     result::{Result, SneakydlError},
     storage::{StorageNotifier, WriteRequest},
+    task::{
+        metadata::TaskMetadata,
+        runtime::{ControlCommand, TaskControl, TaskRuntime, TaskStatus},
+    },
 };
-
-#[derive(Debug, Clone)]
-pub struct TaskMetadata {
-    pub task_id: u64,
-    pub download_id: Uuid,
-    pub url: String,
-    pub request_metadata: RequestMetadata,
-    /// half-open byte range [start, end). end == start => unknown/streaming
-    pub range: Option<Range<u64>>,
-    pub max_retries: u32,
-    pub write_buffer_limit: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct TaskStatusNotify {
-    tx: Arc<Sender<TaskStatus>>,
-    rx: Receiver<TaskStatus>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TaskRuntime {
-    pub status: TaskStatusNotify,
-    pub download_bytes: u64,
-}
-
-#[derive(Debug, Clone)]
-pub enum TaskStatus {
-    Pending,
-    Downloading,
-    Paused,
-    Completed,
-    Failed,
-}
 
 #[derive(Debug)]
 pub struct Task<C: HttpClient> {
@@ -59,62 +29,18 @@ pub struct Task<C: HttpClient> {
     runtime: TaskRuntime,
 }
 
-impl TaskMetadata {
-    pub fn new(
-        download_id: Uuid,
-        task_id: u64,
-        url: String,
-        request_metadata: RequestMetadata,
-    ) -> Self {
-        Self {
-            download_id,
-            task_id,
-            url,
-            request_metadata,
-            range: None,
-            max_retries: 0,
-            write_buffer_limit: 1024 * 1024,
-        }
-    }
-
-    pub fn range(&mut self, range: Range<u64>) {
-        self.range = Some(range);
-    }
-
-    pub fn max_retries(&mut self, max_retries: u32) {
-        self.max_retries = max_retries;
-    }
-
-    pub fn write_buffer_limit(&mut self, write_buffer_limit: u64) {
-        self.write_buffer_limit = write_buffer_limit;
-    }
-}
-
-impl Default for TaskStatusNotify {
-    fn default() -> Self {
-        let (tx, rx) = channel(TaskStatus::Pending);
-
-        Self {
-            tx: Arc::new(tx),
-            rx,
-        }
-    }
-}
-
 impl<C: HttpClient> Task<C> {
     pub fn new(
         http: Arc<C>,
         storage_request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
+        status_tx: Arc<watch::Sender<TaskStatus>>,
         metadata: TaskMetadata,
     ) -> Self {
         Self {
             http,
             storage_request_tx,
             metadata,
-            runtime: TaskRuntime {
-                status: TaskStatusNotify::default(),
-                download_bytes: 0,
-            },
+            runtime: TaskRuntime::new(status_tx),
         }
     }
 
@@ -123,7 +49,6 @@ impl<C: HttpClient> Task<C> {
             match self.job().await {
                 Ok(_) => break,
                 Err(e) => {
-                    self.update_status(TaskStatus::Failed)?;
                     if attempt == self.metadata.max_retries {
                         return Err(e);
                     }
@@ -135,7 +60,7 @@ impl<C: HttpClient> Task<C> {
     }
 
     pub async fn job(&mut self) -> Result<()> {
-        self.update_status(TaskStatus::Downloading)?;
+        self.runtime.update_downloading(0)?;
         debug!(
             "Download [{}] - Task [{}] starting download",
             self.metadata.download_id, self.metadata.task_id
@@ -158,10 +83,10 @@ impl<C: HttpClient> Task<C> {
         );
 
         while let Some(item) = stream.next().await {
-            let status = self.runtime.status.rx.borrow().clone();
+            let status = self.runtime.control_rx.borrow().clone();
 
             match status {
-                TaskStatus::Downloading => {
+                ControlCommand::Start => {
                     let item = item.map_err(SneakydlError::RequestError)?;
                     let item_len = item.len() as u64;
 
@@ -179,14 +104,14 @@ impl<C: HttpClient> Task<C> {
                                 .await?,
                         );
 
-                        self.runtime.download_bytes += total_bytes_size;
                         total_bytes_size = 0;
                     }
+                    self.runtime.update_downloading(item_len)?;
                 }
                 _ => {
+                    self.runtime.update_status(TaskStatus::Paused)?;
                     self.runtime
-                        .status
-                        .rx
+                        .control_rx
                         .changed()
                         .await
                         .map_err(|_| SneakydlError::TaskUpdateStatusRecvFailed)?;
@@ -199,7 +124,6 @@ impl<C: HttpClient> Task<C> {
                 self.create_storage_notify(take(&mut bytes), total_bytes_size)
                     .await?,
             );
-            self.runtime.download_bytes += total_bytes_size;
         }
 
         debug!(
@@ -209,14 +133,15 @@ impl<C: HttpClient> Task<C> {
         for notify in storage_notifys {
             notify
                 .await
-                .map_err(|_| SneakydlError::NotifyRecvFailed)??;
+                .map_err(|_| SneakydlError::WriteResponseReceiveFailed)??;
         }
 
         debug!(
             "Download [{}] - Task [{}] completed ({} bytes)",
             self.metadata.download_id, self.metadata.task_id, self.runtime.download_bytes
         );
-        self.update_status(TaskStatus::Completed)
+
+        self.runtime.update_status(TaskStatus::Completed)
     }
 
     async fn create_storage_notify(
@@ -225,6 +150,7 @@ impl<C: HttpClient> Task<C> {
         total_bytes_size: u64,
     ) -> Result<JoinHandle<Result<()>>> {
         let storage_notify = StorageNotifier::new(
+            self.metadata.task_id,
             self.storage_request_tx.clone(),
             self.runtime.download_bytes,
             bytes,
@@ -238,19 +164,7 @@ impl<C: HttpClient> Task<C> {
         Ok(tokio::spawn(storage_notify.send_wait_done()))
     }
 
-    fn update_status(&self, status: TaskStatus) -> Result<()> {
-        self.runtime
-            .status
-            .tx
-            .send(status)
-            .map_err(SneakydlError::TaskUpdateStatusSendFailed)
-    }
-
-    pub fn pause(&self) -> Result<()> {
-        self.update_status(TaskStatus::Paused)
-    }
-
-    pub fn start(&self) -> Result<()> {
-        self.update_status(TaskStatus::Downloading)
+    pub fn get_control(&self) -> TaskControl {
+        TaskControl::new(self.runtime.control_tx.clone())
     }
 }

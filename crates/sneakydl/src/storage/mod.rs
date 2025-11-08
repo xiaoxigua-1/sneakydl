@@ -23,6 +23,7 @@ pub trait Storage: Send + Sync + 'static {
 }
 
 pub struct WriteRequest {
+    pub task_id: u32,
     pub offset: u64,
     pub data: Vec<Bytes>,
     pub done_tx: oneshot::Sender<()>,
@@ -38,10 +39,12 @@ pub struct StorageWorker<T: Storage> {
     storage: T,
     request_rx: mpsc::Receiver<Option<WriteRequest>>,
     request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
+    // update_status_rx: watch::Receiver<>
 }
 
 impl StorageNotifier {
     pub fn new(
+        task_id: u32,
         request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
         offset: u64,
         data: Vec<Bytes>,
@@ -51,6 +54,7 @@ impl StorageNotifier {
         Self {
             request_tx,
             write_request: Some(WriteRequest {
+                task_id,
                 offset,
                 data,
                 done_tx,
@@ -63,10 +67,10 @@ impl StorageNotifier {
         self.request_tx
             .send(self.write_request)
             .await
-            .map_err(SneakydlError::StorageRequestSendFailed)?;
+            .map_err(SneakydlError::WriteRequestSendFailed)?;
         self.done_rx
             .await
-            .map_err(|_| SneakydlError::NotifyRecvFailed)
+            .map_err(|_| SneakydlError::WriteResponseReceiveFailed)
     }
 }
 
@@ -96,7 +100,7 @@ impl<T: Storage> StorageWorker<T> {
                     .map_err(SneakydlError::IoError)?;
                 req.done_tx
                     .send(())
-                    .map_err(|_| SneakydlError::NotifySendFailed)?;
+                    .map_err(|_| SneakydlError::WriteResponseSendFailed)?;
             } else {
                 self.request_rx.close();
             }
