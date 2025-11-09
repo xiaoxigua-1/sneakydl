@@ -112,7 +112,7 @@ async fn task_test() {
     let mut task = Task::new(void_client, storage_writer, Arc::new(status_tx), metadata);
 
     let download_job: JoinHandle<Result<()>> = tokio::spawn(async move {
-        task.job().await?;
+        task.run().await?;
         storage_writer_clone.close().await
     });
     let storage_job = tokio::spawn(async move {

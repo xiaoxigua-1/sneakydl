@@ -41,9 +41,9 @@ impl<C: HttpClient> Task<C> {
         }
     }
 
-    pub async fn retry_job(&mut self) -> Result<()> {
+    pub async fn run(&mut self) -> Result<()> {
         for attempt in 1..(self.metadata.max_retries + 1) {
-            match self.job().await {
+            match self.execute_once().await {
                 Ok(_) => break,
                 Err(e) => {
                     if attempt == self.metadata.max_retries {
@@ -58,7 +58,7 @@ impl<C: HttpClient> Task<C> {
         Ok(())
     }
 
-    pub async fn job(&mut self) -> Result<()> {
+    async fn execute_once(&mut self) -> Result<()> {
         self.runtime.update_downloading(0)?;
         debug!(
             "Download [{}] - Task [{}] starting download",
