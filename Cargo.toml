@@ -10,14 +10,12 @@ edition = "2024"
 [workspace.dependencies]
 reqwest = "0.12.23"
 bytes = "1.10.1"
-tokio = { version = "1.47.1", features = ["full"] }
+tokio = "1.47.1"
 tokio-stream = "0.1.17"
 futures-core = "0.3.31"
 
 chrono = "0.4.42"
-uuid = {version = "1.18.1", features = [
-    "v4",
-]}
+uuid = "1.18.1"
 async-trait = "0.1.89"
 anyhow = "1.0.100"
 

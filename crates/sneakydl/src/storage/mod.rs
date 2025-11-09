@@ -1,3 +1,4 @@
+#[cfg(feature = "tokio-storage")]
 pub mod tokio_file;
 
 use std::sync::Arc;

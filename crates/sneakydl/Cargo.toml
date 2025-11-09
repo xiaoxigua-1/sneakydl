@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros"] }
 tokio-stream.workspace = true
 futures-core.workspace = true
 async-trait.workspace = true
@@ -20,8 +20,12 @@ strum_macros.workspace = true
 reqwest = { workspace = true, optional = true }
 
 [features]
-default = ["tokio/full"]
+default = []
+
 reqwest-client = ["reqwest", "reqwest/stream"]
+tokio-storage = ["tokio/fs"]
 
 [dev-dependencies]
 env_logger.workspace = true
+tokio = { workspace = true, features = ["test-util"]}
+uuid = { workspace = true, features = ["v4"] }
