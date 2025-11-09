@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures_core::{Stream, stream::BoxStream};
 use sneakydl::{
     net::{HeadResponse, HttpClient, RequestMetadata, RequestMethod},
-    result::{Result, SneakydlError},
+    result::Result,
     storage::{Storage, StorageWorker},
     task::{Task, metadata::TaskMetadata, runtime::TaskStatus},
 };
@@ -16,7 +16,7 @@ struct VoidStorage;
 struct VoidClient {
     size: usize,
 }
-struct VoidStream {
+struct FixedChunkStream {
     data: Vec<u8>,
 }
 
@@ -55,11 +55,11 @@ impl HttpClient for VoidClient {
         _: RequestMetadata,
         _: Option<std::ops::Range<u64>>,
     ) -> anyhow::Result<Self::Iter> {
-        Ok(Box::pin(VoidStream::new(self.size)))
+        Ok(Box::pin(FixedChunkStream::new(self.size)))
     }
 }
 
-impl VoidStream {
+impl FixedChunkStream {
     fn new(size: usize) -> Self {
         Self {
             data: vec![0u8; size],
@@ -67,7 +67,7 @@ impl VoidStream {
     }
 }
 
-impl Stream for VoidStream {
+impl Stream for FixedChunkStream {
     type Item = anyhow::Result<Bytes>;
 
     fn poll_next(
@@ -107,16 +107,13 @@ async fn task_test() {
     let request_metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
     let metadata = TaskMetadata::new(download_id, 0, String::new(), request_metadata);
     let (status_tx, status_rx) = watch::channel(TaskStatus::Pending);
-    let request_tx = storage_worker.get_request_tx();
-    let request_tx_clone = storage_worker.get_request_tx();
-    let mut task = Task::new(void_client, request_tx, Arc::new(status_tx), metadata);
+    let storage_writer = storage_worker.storage_writer();
+    let storage_writer_clone = storage_worker.storage_writer();
+    let mut task = Task::new(void_client, storage_writer, Arc::new(status_tx), metadata);
 
     let download_job: JoinHandle<Result<()>> = tokio::spawn(async move {
         task.job().await?;
-        request_tx_clone
-            .send(None)
-            .await
-            .map_err(SneakydlError::WriteRequestSendFailed)
+        storage_writer_clone.close().await
     });
     let storage_job = tokio::spawn(async move {
         storage_worker.run().await.unwrap();

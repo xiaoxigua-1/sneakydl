@@ -3,10 +3,7 @@ pub mod runtime;
 
 use bytes::Bytes;
 use log::{debug, trace};
-use tokio::{
-    sync::{mpsc, watch},
-    task::JoinHandle,
-};
+use tokio::{sync::watch, task::JoinHandle};
 use tokio_stream::StreamExt;
 
 use std::{mem::take, pin::pin, sync::Arc};
@@ -14,7 +11,7 @@ use std::{mem::take, pin::pin, sync::Arc};
 use crate::{
     net::HttpClient,
     result::{Result, SneakydlError},
-    storage::{StorageNotifier, WriteRequest},
+    storage::{StorageNotifier, StorageWriter},
     task::{
         metadata::TaskMetadata,
         runtime::{ControlCommand, TaskControl, TaskRuntime, TaskStatus},
@@ -24,7 +21,7 @@ use crate::{
 #[derive(Debug)]
 pub struct Task<C: HttpClient> {
     http: Arc<C>,
-    storage_request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
+    storage_writer: StorageWriter,
     metadata: TaskMetadata,
     runtime: TaskRuntime,
 }
@@ -32,13 +29,13 @@ pub struct Task<C: HttpClient> {
 impl<C: HttpClient> Task<C> {
     pub fn new(
         http: Arc<C>,
-        storage_request_tx: Arc<mpsc::Sender<Option<WriteRequest>>>,
+        storage_writer: StorageWriter,
         status_tx: Arc<watch::Sender<TaskStatus>>,
         metadata: TaskMetadata,
     ) -> Self {
         Self {
             http,
-            storage_request_tx,
+            storage_writer,
             metadata,
             runtime: TaskRuntime::new(status_tx),
         }
@@ -50,6 +47,8 @@ impl<C: HttpClient> Task<C> {
                 Ok(_) => break,
                 Err(e) => {
                     if attempt == self.metadata.max_retries {
+                        self.runtime.update_status(TaskStatus::Failed)?;
+
                         return Err(e);
                     }
                 }
@@ -151,7 +150,7 @@ impl<C: HttpClient> Task<C> {
     ) -> Result<JoinHandle<Result<()>>> {
         let storage_notify = StorageNotifier::new(
             self.metadata.task_id,
-            self.storage_request_tx.clone(),
+            self.storage_writer.clone(),
             self.runtime.download_bytes,
             bytes,
         );
@@ -164,7 +163,7 @@ impl<C: HttpClient> Task<C> {
         Ok(tokio::spawn(storage_notify.send_wait_done()))
     }
 
-    pub fn get_control(&self) -> TaskControl {
+    pub fn task_control(&self) -> TaskControl {
         TaskControl::new(self.runtime.control_tx.clone())
     }
 }

@@ -1,7 +1,7 @@
 use tokio::sync::{mpsc, watch};
 
 use crate::{
-    storage::WriteRequest,
+    storage::StorageWriteRequest,
     task::runtime::{ControlCommand, TaskStatus},
 };
 
@@ -16,7 +16,7 @@ pub enum SneakydlError {
 
     // Storage
     IoError(anyhow::Error),
-    WriteRequestSendFailed(mpsc::error::SendError<Option<WriteRequest>>),
+    WriteRequestSendFailed(mpsc::error::SendError<Option<StorageWriteRequest>>),
     WriteRequestReceiveFailed,
     WriteResponseSendFailed,
     WriteResponseReceiveFailed,
