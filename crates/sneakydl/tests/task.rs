@@ -95,10 +95,12 @@ impl Stream for FixedChunkStream {
 /// The test ensures that:
 /// 1. A `Task` can stream data from the mock client and send write requests correctly.
 /// 2. The `StorageWorker` can receive and process these requests without errors.
-/// 3. Both async tasks (`download_job` and `storage_job`) complete cleanly without deadlocks or panics.
+/// 3. Status updates propagate correctly and completion reports accurate total bytes.
+/// 4. All async tasks (`download_job`, `storage_job`, `check_status_job`) complete cleanly
+///    without deadlocks or panics.
 ///
-/// It effectively validates the coordination between downloading and storage components
-/// without relying on external I/O.
+/// Test downloads ~1MB (1,048,566 bytes) in 1KB chunks to validate coordination between
+/// downloading and storage components without relying on external I/O.
 #[test]
 async fn task_test() {
     env_logger::init();
