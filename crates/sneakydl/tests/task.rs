@@ -1,8 +1,9 @@
-use std::{collections::HashMap, sync::Arc, task::Poll};
+use std::{collections::HashMap, sync::Arc, task::Poll, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::{Stream, stream::BoxStream};
+use log::trace;
 use sneakydl::{
     net::{HeadResponse, HttpClient, RequestMetadata, RequestMethod},
     result::Result,
@@ -10,6 +11,7 @@ use sneakydl::{
     task::{Task, metadata::TaskMetadata, runtime::TaskStatus},
 };
 use tokio::{sync::watch, task::JoinHandle, test};
+use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 struct VoidStorage;
@@ -55,7 +57,9 @@ impl HttpClient for VoidClient {
         _: RequestMetadata,
         _: Option<std::ops::Range<u64>>,
     ) -> anyhow::Result<Self::Iter> {
-        Ok(Box::pin(FixedChunkStream::new(self.size)))
+        Ok(Box::pin(
+            FixedChunkStream::new(self.size).throttle(Duration::from_micros(1)),
+        ))
     }
 }
 
@@ -98,15 +102,16 @@ impl Stream for FixedChunkStream {
 #[test]
 async fn task_test() {
     env_logger::init();
+    let test_size: u64 = 1024 * 1024 - 10;
     let void_client = Arc::new(VoidClient {
-        size: 1024 * 1024 - 10,
+        size: test_size as usize,
     });
     let mut storage_worker = StorageWorker::new(VoidStorage, 100);
 
     let download_id = Uuid::new_v4();
     let request_metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
     let metadata = TaskMetadata::new(download_id, 0, String::new(), request_metadata);
-    let (status_tx, status_rx) = watch::channel(TaskStatus::Pending);
+    let (status_tx, mut status_rx) = watch::channel(TaskStatus::Pending);
     let storage_writer = storage_worker.storage_writer();
     let storage_writer_clone = storage_worker.storage_writer();
     let mut task = Task::new(void_client, storage_writer, Arc::new(status_tx), metadata);
@@ -118,8 +123,23 @@ async fn task_test() {
     let storage_job = tokio::spawn(async move {
         storage_worker.run().await.unwrap();
     });
+    let check_status_job = tokio::spawn(async move {
+        loop {
+            status_rx.changed().await.unwrap();
 
-    let (_, _) = tokio::join!(download_job, storage_job);
+            match *status_rx.borrow() {
+                TaskStatus::Completed { total_bytes } => {
+                    assert_eq!(test_size, total_bytes);
 
-    drop(status_rx);
+                    break;
+                }
+                TaskStatus::Downloading { downloaded } => {
+                    trace!("Downloaded size: {}", downloaded);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let (_, _, _) = tokio::join!(download_job, storage_job, check_status_job);
 }

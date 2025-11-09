@@ -29,7 +29,7 @@ impl TaskMetadata {
             url,
             request_metadata,
             range: None,
-            max_retries: 0,
+            max_retries: 1,
             write_buffer_limit: 1024 * 1024,
         }
     }

@@ -59,7 +59,6 @@ impl<C: HttpClient> Task<C> {
     }
 
     async fn execute_once(&mut self) -> Result<()> {
-        self.runtime.update_downloading(0)?;
         debug!(
             "Download [{}] - Task [{}] starting download",
             self.metadata.download_id, self.metadata.task_id
@@ -95,6 +94,7 @@ impl<C: HttpClient> Task<C> {
                         "Download [{}] - Task [{}] processing chunk of {} bytes",
                         self.metadata.download_id, self.metadata.task_id, item_len
                     );
+                    self.runtime.add_downloaded(item_len)?;
 
                     if total_bytes_size > self.metadata.write_buffer_limit {
                         // write storage
@@ -105,7 +105,6 @@ impl<C: HttpClient> Task<C> {
 
                         total_bytes_size = 0;
                     }
-                    self.runtime.update_downloading(item_len)?;
                 }
                 _ => {
                     self.runtime.update_status(TaskStatus::Paused)?;
@@ -137,10 +136,10 @@ impl<C: HttpClient> Task<C> {
 
         debug!(
             "Download [{}] - Task [{}] completed ({} bytes)",
-            self.metadata.download_id, self.metadata.task_id, self.runtime.download_bytes
+            self.metadata.download_id, self.metadata.task_id, self.runtime.downloaded_bytes
         );
 
-        self.runtime.update_status(TaskStatus::Completed)
+        self.runtime.mark_completed()
     }
 
     async fn create_storage_notify(
@@ -151,7 +150,7 @@ impl<C: HttpClient> Task<C> {
         let storage_notify = StorageNotifier::new(
             self.metadata.task_id,
             self.storage_writer.clone(),
-            self.runtime.download_bytes,
+            self.runtime.downloaded_bytes,
             bytes,
         );
 

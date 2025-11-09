@@ -7,9 +7,9 @@ use crate::result::{Result, SneakydlError};
 #[derive(Debug)]
 pub enum TaskStatus {
     Pending,
-    Downloading { download_bytes: u64 },
+    Downloading { downloaded: u64 },
     Paused,
-    Completed,
+    Completed { total_bytes: u64 },
     Failed,
 }
 
@@ -29,7 +29,7 @@ pub(crate) struct TaskRuntime {
     pub control_tx: Arc<watch::Sender<ControlCommand>>,
     pub control_rx: watch::Receiver<ControlCommand>,
     pub status_tx: Arc<watch::Sender<TaskStatus>>,
-    pub download_bytes: u64,
+    pub downloaded_bytes: u64,
 }
 
 impl TaskControl {
@@ -37,16 +37,18 @@ impl TaskControl {
         Self { inner }
     }
 
-    pub fn start(&self) -> Result<()> {
+    fn send(&self, value: ControlCommand) -> Result<()> {
         self.inner
-            .send(ControlCommand::Start)
+            .send(value)
             .map_err(SneakydlError::TaskUpdateControlCommandSendFailed)
     }
 
+    pub fn start(&self) -> Result<()> {
+        self.send(ControlCommand::Start)
+    }
+
     pub fn pause(&self) -> Result<()> {
-        self.inner
-            .send(ControlCommand::Pause)
-            .map_err(SneakydlError::TaskUpdateControlCommandSendFailed)
+        self.send(ControlCommand::Pause)
     }
 }
 
@@ -58,7 +60,7 @@ impl TaskRuntime {
             control_rx,
             control_tx: Arc::new(control_tx),
             status_tx,
-            download_bytes: 0,
+            downloaded_bytes: 0,
         }
     }
 
@@ -68,10 +70,16 @@ impl TaskRuntime {
             .map_err(SneakydlError::TaskUpdateStatusSendFailed)
     }
 
-    pub fn update_downloading(&mut self, add_size: u64) -> Result<()> {
-        self.download_bytes += add_size;
+    pub fn add_downloaded(&mut self, downloaded: u64) -> Result<()> {
+        self.downloaded_bytes += downloaded;
         self.update_status(TaskStatus::Downloading {
-            download_bytes: self.download_bytes,
+            downloaded: self.downloaded_bytes,
+        })
+    }
+
+    pub fn mark_completed(&self) -> Result<()> {
+        self.update_status(TaskStatus::Completed {
+            total_bytes: self.downloaded_bytes,
         })
     }
 }
