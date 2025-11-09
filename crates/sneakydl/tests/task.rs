@@ -116,10 +116,7 @@ async fn task_test() {
     let storage_writer_clone = storage_worker.storage_writer();
     let mut task = Task::new(void_client, storage_writer, Arc::new(status_tx), metadata);
 
-    let download_job: JoinHandle<Result<()>> = tokio::spawn(async move {
-        task.run().await?;
-        storage_writer_clone.close().await
-    });
+    let download_job: JoinHandle<Result<()>> = tokio::spawn(async move { task.run().await });
     let storage_job = tokio::spawn(async move {
         storage_worker.run().await.unwrap();
     });
@@ -139,6 +136,8 @@ async fn task_test() {
                 _ => {}
             }
         }
+
+        storage_writer_clone.close().await
     });
 
     let (_, _, _) = tokio::join!(download_job, storage_job, check_status_job);
