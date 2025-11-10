@@ -128,10 +128,8 @@ async fn task_test() {
     );
 
     let download_job: JoinHandle<Result<()>> = tokio::spawn(async move { task.run().await });
-    let storage_job = tokio::spawn(async move {
-        storage_worker.run().await.unwrap();
-    });
-    let check_status_job = tokio::spawn(async move {
+    let storage_job = tokio::spawn(async move { storage_worker.run().await });
+    let status_monitor_job = tokio::spawn(async move {
         loop {
             match status_monitor.wait_for_change().await? {
                 TaskStatus::Completed { total_bytes } => {
@@ -149,5 +147,10 @@ async fn task_test() {
         storage_writer_clone.close().await
     });
 
-    let (_, _, _) = tokio::join!(download_job, storage_job, check_status_job);
+    let (download_result, storage_result, status_monitor_result) =
+        tokio::join!(download_job, storage_job, status_monitor_job);
+
+    assert!(download_result.unwrap().is_ok());
+    assert!(storage_result.unwrap().is_ok());
+    assert!(status_monitor_result.unwrap().is_ok());
 }
