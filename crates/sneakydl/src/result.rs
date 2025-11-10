@@ -11,6 +11,8 @@ pub type Result<T> = std::result::Result<T, SneakydlError>;
 pub enum SneakydlError {
     Config(&'static str),
 
+    JoinError(tokio::task::JoinError),
+
     // HttpClient
     RequestError(anyhow::Error),
 

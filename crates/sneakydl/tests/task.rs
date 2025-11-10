@@ -7,7 +7,7 @@ use log::trace;
 use sneakydl::{
     net::{HeadResponse, HttpClient, RequestMetadata, RequestMethod},
     result::Result,
-    storage::{Storage, StorageWorker},
+    storage::{Storage, worker::StorageWorker},
     task::{
         Task,
         metadata::TaskMetadata,
@@ -112,8 +112,7 @@ async fn task_test() {
     let void_client = Arc::new(VoidClient {
         size: test_size as usize,
     });
-    let mut storage_worker = StorageWorker::new(VoidStorage, 100);
-
+    let mut storage_worker = StorageWorker::new(Arc::new(VoidStorage), 100);
     let download_id = Uuid::new_v4();
     let request_metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
     let metadata = TaskMetadata::new(download_id, 0, String::new(), request_metadata);

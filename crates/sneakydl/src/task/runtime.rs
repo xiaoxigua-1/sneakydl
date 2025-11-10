@@ -104,9 +104,7 @@ impl TaskRuntime {
 
     pub fn add_downloaded(&mut self, downloaded: u64) -> Result<()> {
         self.downloaded_bytes += downloaded;
-        self.update_status(TaskStatus::Downloading {
-            downloaded: self.downloaded_bytes,
-        })
+        self.update_status(TaskStatus::Downloading { downloaded })
     }
 
     pub fn mark_completed(&self) -> Result<()> {

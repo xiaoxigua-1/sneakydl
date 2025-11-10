@@ -41,7 +41,7 @@ impl<C: HttpClient> Task<C> {
         }
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
         for attempt in 1..(self.metadata.max_retries + 1) {
             match self.execute_once().await {
                 Ok(_) => break,

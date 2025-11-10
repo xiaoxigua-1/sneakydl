@@ -78,7 +78,7 @@ pub trait HttpClient: Send + Sync + 'static {
     ///
     /// Typically a `Stream` that produces chunks of [`Bytes`] asynchronously.
     /// Example: `impl Stream<Item = anyhow::Result<Bytes>>`
-    type Iter: Stream<Item = anyhow::Result<Bytes>>;
+    type Iter: Stream<Item = anyhow::Result<Bytes>> + Send;
 
     /// Sends an HTTP `HEAD` request to retrieve metadata about the target resource.
     ///

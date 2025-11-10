@@ -18,6 +18,13 @@ pub struct Config {
     pub max_connection: u8,
 }
 
+#[derive(Debug, Clone)]
+pub enum SplitStrategy {
+    BySize(usize),
+    ByCount(usize),
+    Single,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
