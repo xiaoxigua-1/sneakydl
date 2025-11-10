@@ -58,7 +58,7 @@ impl TaskStatusMonitor {
         self.rx
             .changed()
             .await
-            .map_err(|_| SneakydlError::TaskUpdateStatusRecvFailed)?;
+            .map_err(|_| SneakydlError::TaskStatusRecvFailed)?;
 
         Ok(self.rx.borrow().clone())
     }
@@ -72,7 +72,7 @@ impl TaskControl {
     fn send(&self, value: ControlCommand) -> Result<()> {
         self.inner
             .send(value)
-            .map_err(SneakydlError::TaskUpdateControlCommandSendFailed)
+            .map_err(SneakydlError::TaskControlCommandSendFailed)
     }
 
     pub fn start(&self) -> Result<()> {
@@ -99,7 +99,7 @@ impl TaskRuntime {
     pub fn update_status(&self, status: TaskStatus) -> Result<()> {
         self.status_tx
             .send(status)
-            .map_err(SneakydlError::TaskUpdateStatusSendFailed)
+            .map_err(SneakydlError::TaskStatusSendFailed)
     }
 
     pub fn add_downloaded(&mut self, downloaded: u64) -> Result<()> {

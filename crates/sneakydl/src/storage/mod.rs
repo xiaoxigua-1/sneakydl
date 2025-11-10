@@ -71,7 +71,7 @@ impl StorageNotifier {
         self.storage_writer.send(self.write_request).await?;
         self.done_rx
             .await
-            .map_err(|_| SneakydlError::WriteResponseReceiveFailed)
+            .map_err(|_| SneakydlError::StorageWriteRequestRecvFailed)
     }
 }
 
@@ -84,7 +84,7 @@ impl StorageWriter {
         self.inner
             .send(value)
             .await
-            .map_err(SneakydlError::WriteRequestSendFailed)
+            .map_err(SneakydlError::StorageWriteRequestSendFailed)
     }
 }
 
@@ -114,7 +114,7 @@ impl<T: Storage> StorageWorker<T> {
                     .map_err(SneakydlError::IoError)?;
                 req.done_tx
                     .send(())
-                    .map_err(|_| SneakydlError::WriteResponseSendFailed)?;
+                    .map_err(|_| SneakydlError::StorageWriteResponseSendFailed)?;
             } else {
                 self.request_rx.close();
             }

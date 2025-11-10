@@ -112,7 +112,7 @@ impl<C: HttpClient> Task<C> {
                         .control_rx
                         .changed()
                         .await
-                        .map_err(|_| SneakydlError::TaskUpdateStatusRecvFailed)?;
+                        .map_err(|_| SneakydlError::TaskStatusRecvFailed)?;
                 }
             }
         }
@@ -131,7 +131,7 @@ impl<C: HttpClient> Task<C> {
         for notify in storage_notifys {
             notify
                 .await
-                .map_err(|_| SneakydlError::WriteResponseReceiveFailed)??;
+                .map_err(|_| SneakydlError::StorageWriteResponseRecvFailed)??;
         }
 
         debug!(

@@ -16,14 +16,16 @@ pub enum SneakydlError {
 
     // Storage
     IoError(anyhow::Error),
-    WriteRequestSendFailed(mpsc::error::SendError<Option<StorageWriteRequest>>),
-    WriteRequestReceiveFailed,
-    WriteResponseSendFailed,
-    WriteResponseReceiveFailed,
+    StorageWriteRequestSendFailed(mpsc::error::SendError<Option<StorageWriteRequest>>),
+    StorageWriteResponseSendFailed,
+    StorageWriteRequestRecvFailed,
+    StorageWriteResponseRecvFailed,
 
-    // Task
-    TaskUpdateControlCommandSendFailed(watch::error::SendError<ControlCommand>),
-    TaskUpdateControlCommandRecvFailed,
-    TaskUpdateStatusSendFailed(watch::error::SendError<TaskStatus>),
-    TaskUpdateStatusRecvFailed,
+    // Task - Control
+    TaskControlCommandSendFailed(watch::error::SendError<ControlCommand>),
+    TaskControlCommandRecvFailed,
+
+    // Task - Status
+    TaskStatusSendFailed(watch::error::SendError<TaskStatus>),
+    TaskStatusRecvFailed,
 }
