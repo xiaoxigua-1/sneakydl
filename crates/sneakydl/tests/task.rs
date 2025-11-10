@@ -8,9 +8,13 @@ use sneakydl::{
     net::{HeadResponse, HttpClient, RequestMetadata, RequestMethod},
     result::Result,
     storage::{Storage, StorageWorker},
-    task::{Task, metadata::TaskMetadata, runtime::TaskStatus},
+    task::{
+        Task,
+        metadata::TaskMetadata,
+        runtime::{TaskStatus, TaskStatusMonitor},
+    },
 };
-use tokio::{sync::watch, task::JoinHandle, test};
+use tokio::{task::JoinHandle, test};
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
@@ -113,10 +117,15 @@ async fn task_test() {
     let download_id = Uuid::new_v4();
     let request_metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
     let metadata = TaskMetadata::new(download_id, 0, String::new(), request_metadata);
-    let (status_tx, mut status_rx) = watch::channel(TaskStatus::Pending);
+    let mut status_monitor = TaskStatusMonitor::default();
     let storage_writer = storage_worker.storage_writer();
     let storage_writer_clone = storage_worker.storage_writer();
-    let mut task = Task::new(void_client, storage_writer, Arc::new(status_tx), metadata);
+    let mut task = Task::new(
+        void_client,
+        storage_writer,
+        status_monitor.sender(),
+        metadata,
+    );
 
     let download_job: JoinHandle<Result<()>> = tokio::spawn(async move { task.run().await });
     let storage_job = tokio::spawn(async move {
@@ -124,9 +133,7 @@ async fn task_test() {
     });
     let check_status_job = tokio::spawn(async move {
         loop {
-            status_rx.changed().await.unwrap();
-
-            match *status_rx.borrow() {
+            match status_monitor.wait_for_change().await? {
                 TaskStatus::Completed { total_bytes } => {
                     assert_eq!(test_size, total_bytes);
 

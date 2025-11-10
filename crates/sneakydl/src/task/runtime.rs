@@ -4,13 +4,19 @@ use tokio::sync::watch;
 
 use crate::result::{Result, SneakydlError};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TaskStatus {
     Pending,
     Downloading { downloaded: u64 },
     Paused,
     Completed { total_bytes: u64 },
     Failed,
+}
+
+#[derive(Debug)]
+pub struct TaskStatusMonitor {
+    tx: Arc<watch::Sender<TaskStatus>>,
+    rx: watch::Receiver<TaskStatus>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +36,32 @@ pub(crate) struct TaskRuntime {
     pub control_rx: watch::Receiver<ControlCommand>,
     pub status_tx: Arc<watch::Sender<TaskStatus>>,
     pub downloaded_bytes: u64,
+}
+
+impl Default for TaskStatusMonitor {
+    fn default() -> Self {
+        let (tx, rx) = watch::channel(TaskStatus::Pending);
+
+        Self {
+            tx: Arc::new(tx),
+            rx,
+        }
+    }
+}
+
+impl TaskStatusMonitor {
+    pub fn sender(&self) -> Arc<watch::Sender<TaskStatus>> {
+        self.tx.clone()
+    }
+
+    pub async fn wait_for_change(&mut self) -> Result<TaskStatus> {
+        self.rx
+            .changed()
+            .await
+            .map_err(|_| SneakydlError::TaskUpdateStatusRecvFailed)?;
+
+        Ok(self.rx.borrow().clone())
+    }
 }
 
 impl TaskControl {
