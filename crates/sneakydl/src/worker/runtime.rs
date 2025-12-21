@@ -11,6 +11,6 @@ use crate::{
 pub(crate) struct DownloadWorkerRuntime<C: HttpClient, S: Storage> {
     pub tasks: Vec<Task<C>>,
     pub storage_worker: StorageWorker<S>,
-    pub status_monitors: Vec<TaskStatusMonitor>,
+    pub status_monitor: TaskStatusMonitor,
     pub task_controls: Vec<TaskControl>,
 }

@@ -3,7 +3,7 @@ pub mod runtime;
 
 use bytes::Bytes;
 use log::{debug, trace};
-use tokio::{sync::watch, task::JoinHandle};
+use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::StreamExt;
 
 use std::{mem::take, pin::pin, sync::Arc};
@@ -30,7 +30,7 @@ impl<C: HttpClient> Task<C> {
     pub fn new(
         http: Arc<C>,
         storage_writer: StorageWriter,
-        status_tx: Arc<watch::Sender<TaskStatus>>,
+        status_tx: Arc<mpsc::Sender<TaskStatus>>,
         metadata: TaskMetadata,
     ) -> Self {
         Self {
@@ -47,7 +47,12 @@ impl<C: HttpClient> Task<C> {
                 Ok(_) => break,
                 Err(e) => {
                     if attempt == self.metadata.max_retries {
-                        self.runtime.update_status(TaskStatus::Failed)?;
+                        self.runtime
+                            .update_status(TaskStatus::Failed {
+                                task_id: self.metadata.task_id,
+                                download_id: self.metadata.download_id,
+                            })
+                            .await?;
 
                         return Err(e);
                     }
@@ -59,12 +64,15 @@ impl<C: HttpClient> Task<C> {
     }
 
     async fn execute_once(&mut self) -> Result<()> {
+        let metadata = self.metadata.clone();
+        let download_id = metadata.download_id;
+        let task_id = metadata.task_id;
+
         debug!(
             "Download [{}] - Task [{}] starting download",
-            self.metadata.download_id, self.metadata.task_id
+            download_id, task_id
         );
 
-        let metadata = self.metadata.clone();
         let mut bytes: Vec<Bytes> = vec![];
         let mut total_bytes_size: u64 = 0;
         let mut stream = pin!(
@@ -77,7 +85,7 @@ impl<C: HttpClient> Task<C> {
 
         debug!(
             "Download [{}] - Task [{}] request sent successfully",
-            self.metadata.download_id, self.metadata.task_id
+            download_id, task_id
         );
 
         while let Some(item) = stream.next().await {
@@ -92,9 +100,11 @@ impl<C: HttpClient> Task<C> {
                     bytes.push(item);
                     trace!(
                         "Download [{}] - Task [{}] processing chunk of {} bytes",
-                        self.metadata.download_id, self.metadata.task_id, item_len
+                        download_id, task_id, item_len
                     );
-                    self.runtime.add_downloaded(item_len)?;
+                    self.runtime
+                        .add_downloaded(download_id, task_id, item_len)
+                        .await?;
 
                     if total_bytes_size > self.metadata.write_buffer_limit {
                         // write storage
@@ -107,7 +117,12 @@ impl<C: HttpClient> Task<C> {
                     }
                 }
                 _ => {
-                    self.runtime.update_status(TaskStatus::Paused)?;
+                    self.runtime
+                        .update_status(TaskStatus::Paused {
+                            download_id,
+                            task_id,
+                        })
+                        .await?;
                     self.runtime
                         .control_rx
                         .changed()
@@ -126,7 +141,7 @@ impl<C: HttpClient> Task<C> {
 
         debug!(
             "Download [{}] - Task [{}] WriteRequest sent, awaiting StorageWorker completion",
-            self.metadata.download_id, self.metadata.task_id
+            download_id, task_id
         );
         for notify in storage_notifys {
             notify
@@ -134,12 +149,7 @@ impl<C: HttpClient> Task<C> {
                 .map_err(|_| SneakydlError::StorageWriteResponseRecvFailed)??;
         }
 
-        debug!(
-            "Download [{}] - Task [{}] completed ({} bytes)",
-            self.metadata.download_id, self.metadata.task_id, self.runtime.downloaded_bytes
-        );
-
-        self.runtime.mark_completed()
+        self.runtime.mark_completed(download_id, task_id).await
     }
 
     async fn create_storage_notify(

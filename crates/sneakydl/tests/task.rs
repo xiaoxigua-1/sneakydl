@@ -7,7 +7,7 @@ use log::trace;
 use sneakydl::{
     net::{HeadResponse, HttpClient, RequestMetadata, RequestMethod},
     result::Result,
-    storage::{Storage, worker::StorageWorker},
+    storage::{Storage, monitor::StorageMonitor, worker::StorageWorker},
     task::{
         Task,
         metadata::TaskMetadata,
@@ -112,14 +112,20 @@ async fn task_test() {
     let void_client = Arc::new(VoidClient {
         size: test_size as usize,
     });
-    let mut storage_worker = StorageWorker::new(Arc::new(VoidStorage), 100);
-    let download_id = Uuid::new_v4();
+
+    let storage_monitor = StorageMonitor::default();
+    let mut status_monitor = TaskStatusMonitor::new(100);
+
+    let storage_worker = StorageWorker::new(Arc::new(VoidStorage), 100, storage_monitor.sender());
+
+    let download_id = Uuid::default();
+    let task_id = 0;
     let request_metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
-    let metadata = TaskMetadata::new(download_id, 0, String::new(), request_metadata);
-    let mut status_monitor = TaskStatusMonitor::default();
+    let metadata = TaskMetadata::new(download_id, task_id, String::new(), request_metadata);
+
     let storage_writer = storage_worker.storage_writer();
     let storage_writer_clone = storage_worker.storage_writer();
-    let mut task = Task::new(
+    let task = Task::new(
         void_client,
         storage_writer,
         status_monitor.sender(),
@@ -129,14 +135,22 @@ async fn task_test() {
     let download_job: JoinHandle<Result<()>> = tokio::spawn(async move { task.run().await });
     let storage_job = tokio::spawn(async move { storage_worker.run().await });
     let status_monitor_job = tokio::spawn(async move {
-        loop {
-            match status_monitor.wait_for_change().await? {
-                TaskStatus::Completed { total_bytes } => {
+        while let Some(status) = status_monitor.recv().await {
+            match status {
+                TaskStatus::Completed {
+                    task_id: _,
+                    download_id: _,
+                    total_bytes,
+                } => {
                     assert_eq!(test_size, total_bytes);
 
                     break;
                 }
-                TaskStatus::Downloading { downloaded } => {
+                TaskStatus::Downloading {
+                    download_id: _,
+                    task_id: _,
+                    downloaded,
+                } => {
                     trace!("Downloaded size: {}", downloaded);
                 }
                 _ => {}

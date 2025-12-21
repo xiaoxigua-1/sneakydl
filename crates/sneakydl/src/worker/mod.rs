@@ -3,13 +3,13 @@ pub mod runtime;
 
 use std::sync::Arc;
 
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::Semaphore;
 
 use crate::{
     config::SplitStrategy,
     net::HttpClient,
     result::{Result, SneakydlError},
-    storage::{Storage, worker::StorageWorker},
+    storage::{Storage, monitor::StorageMonitor, worker::StorageWorker},
     task::{Task, metadata::TaskMetadata, runtime::TaskStatusMonitor},
     worker::{metadata::DownloadMetadata, runtime::DownloadWorkerRuntime},
 };
@@ -17,26 +17,19 @@ use crate::{
 pub enum WorkerStatus {}
 
 pub struct DownloadWorker<C: HttpClient, S: Storage> {
-    worker_status: Arc<watch::Sender<WorkerStatus>>,
     metadata: DownloadMetadata,
     runtime: DownloadWorkerRuntime<C, S>,
 }
 
 impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
-    pub async fn new(
-        http: Arc<C>,
-        storage: Arc<S>,
-        worker_status: Arc<watch::Sender<WorkerStatus>>,
-        metadata: DownloadMetadata,
-    ) -> Result<Self> {
+    pub async fn new(http: Arc<C>, storage: Arc<S>, metadata: DownloadMetadata) -> Result<Self> {
         Ok(Self {
             runtime: Self::create_runtime(http, storage, &metadata).await?,
-            worker_status,
             metadata,
         })
     }
 
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let mut task_handles = vec![];
 
         let semaphore = Arc::new(Semaphore::new(self.metadata.task_concurrency));
@@ -44,12 +37,11 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
         let storage_worker_job =
             tokio::spawn(async move { self.runtime.storage_worker.run().await });
 
-        for mut task in self.runtime.tasks {
+        for task in self.runtime.tasks {
             let sem = semaphore.clone();
 
-            self.runtime.task_controls.push(task.task_control());
             task_handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
+                let _permit = sem.acquire().await.map_err(SneakydlError::AcquireError)?;
                 task.run().await
             }));
         }
@@ -68,15 +60,15 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
         metadata: &DownloadMetadata,
     ) -> Result<DownloadWorkerRuntime<C, S>> {
         let mut tasks = vec![];
-        let mut status_monitors = vec![];
+        let status_monitor = TaskStatusMonitor::new(100);
         let mut task_controls = vec![];
 
-        let storage_worker = StorageWorker::new(storage.clone(), 100);
+        let storage_monitor = StorageMonitor::default();
+        let storage_worker = StorageWorker::new(storage.clone(), 100, storage_monitor.sender());
         let storage_writer = storage_worker.storage_writer();
         let task_metadatas = Self::create_task_metadata(http.clone(), metadata).await?;
 
         for metadata in task_metadatas {
-            let status_monitor = TaskStatusMonitor::default();
             let task = Task::new(
                 http.clone(),
                 storage_writer.clone(),
@@ -86,13 +78,12 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
 
             task_controls.push(task.task_control());
             tasks.push(task);
-            status_monitors.push(status_monitor);
         }
 
         Ok(DownloadWorkerRuntime {
             tasks,
             storage_worker,
-            status_monitors,
+            status_monitor,
             task_controls,
         })
     }

@@ -1,22 +1,41 @@
 use std::sync::Arc;
 
-use tokio::sync::watch;
+use log::debug;
+use tokio::sync::{mpsc, watch};
+use uuid::Uuid;
 
 use crate::result::{Result, SneakydlError};
 
 #[derive(Debug, Clone)]
 pub enum TaskStatus {
-    Pending,
-    Downloading { downloaded: u64 },
-    Paused,
-    Completed { total_bytes: u64 },
-    Failed,
+    Pending {
+        download_id: Uuid,
+        task_id: usize,
+    },
+    Downloading {
+        download_id: Uuid,
+        task_id: usize,
+        downloaded: u64,
+    },
+    Paused {
+        download_id: Uuid,
+        task_id: usize,
+    },
+    Completed {
+        download_id: Uuid,
+        task_id: usize,
+        total_bytes: u64,
+    },
+    Failed {
+        download_id: Uuid,
+        task_id: usize,
+    },
 }
 
 #[derive(Debug)]
 pub struct TaskStatusMonitor {
-    tx: Arc<watch::Sender<TaskStatus>>,
-    rx: watch::Receiver<TaskStatus>,
+    tx: Arc<mpsc::Sender<TaskStatus>>,
+    rx: mpsc::Receiver<TaskStatus>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,13 +53,13 @@ pub struct TaskControl {
 pub(crate) struct TaskRuntime {
     pub control_tx: Arc<watch::Sender<ControlCommand>>,
     pub control_rx: watch::Receiver<ControlCommand>,
-    pub status_tx: Arc<watch::Sender<TaskStatus>>,
+    pub status_tx: Arc<mpsc::Sender<TaskStatus>>,
     pub downloaded_bytes: u64,
 }
 
-impl Default for TaskStatusMonitor {
-    fn default() -> Self {
-        let (tx, rx) = watch::channel(TaskStatus::Pending);
+impl TaskStatusMonitor {
+    pub fn new(buffer: usize) -> Self {
+        let (tx, rx) = mpsc::channel(buffer);
 
         Self {
             tx: Arc::new(tx),
@@ -50,17 +69,12 @@ impl Default for TaskStatusMonitor {
 }
 
 impl TaskStatusMonitor {
-    pub fn sender(&self) -> Arc<watch::Sender<TaskStatus>> {
+    pub fn sender(&self) -> Arc<mpsc::Sender<TaskStatus>> {
         self.tx.clone()
     }
 
-    pub async fn wait_for_change(&mut self) -> Result<TaskStatus> {
-        self.rx
-            .changed()
-            .await
-            .map_err(|_| SneakydlError::TaskStatusRecvFailed)?;
-
-        Ok(self.rx.borrow().clone())
+    pub async fn recv(&mut self) -> Option<TaskStatus> {
+        self.rx.recv().await
     }
 }
 
@@ -85,7 +99,7 @@ impl TaskControl {
 }
 
 impl TaskRuntime {
-    pub fn new(status_tx: Arc<watch::Sender<TaskStatus>>) -> Self {
+    pub fn new(status_tx: Arc<mpsc::Sender<TaskStatus>>) -> Self {
         let (control_tx, control_rx) = watch::channel(ControlCommand::Start);
 
         Self {
@@ -96,20 +110,39 @@ impl TaskRuntime {
         }
     }
 
-    pub fn update_status(&self, status: TaskStatus) -> Result<()> {
+    pub async fn update_status(&self, status: TaskStatus) -> Result<()> {
         self.status_tx
             .send(status)
+            .await
             .map_err(SneakydlError::TaskStatusSendFailed)
     }
 
-    pub fn add_downloaded(&mut self, downloaded: u64) -> Result<()> {
+    pub async fn add_downloaded(
+        &mut self,
+        download_id: Uuid,
+        task_id: usize,
+        downloaded: u64,
+    ) -> Result<()> {
         self.downloaded_bytes += downloaded;
-        self.update_status(TaskStatus::Downloading { downloaded })
+        self.update_status(TaskStatus::Downloading {
+            download_id,
+            task_id,
+            downloaded,
+        })
+        .await
     }
 
-    pub fn mark_completed(&self) -> Result<()> {
+    pub async fn mark_completed(&self, download_id: Uuid, task_id: usize) -> Result<()> {
+        debug!(
+            "Download [{}] - Task [{}] completed ({} bytes)",
+            download_id, task_id, self.downloaded_bytes
+        );
+
         self.update_status(TaskStatus::Completed {
+            download_id,
+            task_id,
             total_bytes: self.downloaded_bytes,
         })
+        .await
     }
 }
