@@ -16,6 +16,7 @@ pub struct Config {
     /// NUM The maximum number of connections to one
     /// server for each download.
     pub max_connection: u8,
+    pub split_strategy: SplitStrategy,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,7 @@ impl Default for Config {
             min_split_size: 20 * 1024 * 1024,
             max_concurrent: 5,
             max_connection: 1,
+            split_strategy: SplitStrategy::BySize(5 * 1024 * 1024),
         }
     }
 }

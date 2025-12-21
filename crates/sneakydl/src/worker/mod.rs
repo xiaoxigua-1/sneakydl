@@ -3,6 +3,7 @@ pub mod runtime;
 
 use std::sync::Arc;
 
+use log::trace;
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -10,7 +11,11 @@ use crate::{
     net::HttpClient,
     result::{Result, SneakydlError},
     storage::{Storage, monitor::StorageMonitor, worker::StorageWorker},
-    task::{Task, metadata::TaskMetadata, runtime::TaskStatusMonitor},
+    task::{
+        Task,
+        metadata::TaskMetadata,
+        runtime::{TaskStatus, TaskStatusMonitor},
+    },
     worker::{metadata::DownloadMetadata, runtime::DownloadWorkerRuntime},
 };
 
@@ -34,24 +39,51 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
 
         let semaphore = Arc::new(Semaphore::new(self.metadata.task_concurrency));
         let storage_writer = self.runtime.storage_worker.storage_writer();
+        let mut status_monitor = self.runtime.status_monitor;
         let storage_worker_job =
             tokio::spawn(async move { self.runtime.storage_worker.run().await });
+
+        let status_monitor_job = tokio::spawn(async move {
+            while let Some(status) = status_monitor.recv().await {
+                match status {
+                    TaskStatus::Completed {
+                        task_id: _,
+                        download_id: _,
+                        total_bytes: _,
+                    } => {
+                        break;
+                    }
+                    TaskStatus::Downloading {
+                        download_id: _,
+                        task_id: _,
+                        downloaded,
+                    } => {
+                        trace!("Downloaded size: {}", downloaded);
+                    }
+                    _ => {}
+                }
+            }
+
+            storage_writer.close().await
+        });
 
         for task in self.runtime.tasks {
             let sem = semaphore.clone();
 
             task_handles.push(tokio::spawn(async move {
                 let _permit = sem.acquire().await.map_err(SneakydlError::AcquireError)?;
-                task.run().await
+                let result = task.run().await;
+
+                drop(_permit);
+                result
             }));
         }
 
         for handle in task_handles {
             handle.await.map_err(SneakydlError::JoinError)??;
         }
-
-        storage_writer.close().await?;
-        storage_worker_job.await.map_err(SneakydlError::JoinError)?
+        let _ = storage_worker_job.await.map_err(SneakydlError::JoinError)?;
+        status_monitor_job.await.map_err(SneakydlError::JoinError)?
     }
 
     async fn create_runtime(
