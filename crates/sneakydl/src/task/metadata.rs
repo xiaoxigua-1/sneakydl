@@ -11,9 +11,10 @@ pub struct TaskMetadata {
     pub url: String,
     pub request_metadata: RequestMetadata,
     /// half-open byte range [start, end). end == start => unknown/streaming
-    pub range: Option<Range<u64>>,
-    pub max_retries: u32,
-    pub write_buffer_limit: u64,
+    pub(crate) content_length: Option<u64>,
+    pub(crate) range: Option<Range<u64>>,
+    pub(crate) max_retries: u32,
+    pub(crate) write_buffer_limit: u64,
 }
 
 impl TaskMetadata {
@@ -27,6 +28,7 @@ impl TaskMetadata {
             download_id,
             task_id,
             url,
+            content_length: None,
             request_metadata,
             range: None,
             max_retries: 1,
@@ -36,6 +38,12 @@ impl TaskMetadata {
 
     pub fn range(mut self, range: Range<u64>) -> Self {
         self.range = Some(range);
+
+        self
+    }
+
+    pub fn content_length(mut self, content_length: Option<u64>) -> Self {
+        self.content_length = content_length;
 
         self
     }

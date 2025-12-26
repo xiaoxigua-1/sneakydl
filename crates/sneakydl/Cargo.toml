@@ -28,3 +28,6 @@ tokio-storage = ["tokio/fs"]
 [dev-dependencies]
 env_logger.workspace = true
 tokio = { workspace = true, features = ["test-util"]}
+clap.workspace = true
+indicatif.workspace = true
+sneakydl = { path = "../sneakydl", features = ["reqwest-client", "tokio-storage"] }

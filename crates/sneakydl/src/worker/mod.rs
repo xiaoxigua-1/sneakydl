@@ -3,7 +3,7 @@ pub mod runtime;
 
 use std::sync::Arc;
 
-use log::trace;
+use log::{error, trace};
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -34,37 +34,44 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
         })
     }
 
+    pub fn subscribe_task_status(&mut self) -> Option<TaskStatusMonitor> {
+        self.runtime.status_monitor.take()
+    }
+
+    pub fn subscribe_storage_status(&mut self) -> Option<StorageMonitor> {
+        self.runtime.storage_monitor.take()
+    }
+
     pub async fn run(self) -> Result<()> {
         let mut task_handles = vec![];
 
         let semaphore = Arc::new(Semaphore::new(self.metadata.task_concurrency));
         let storage_writer = self.runtime.storage_worker.storage_writer();
-        let mut status_monitor = self.runtime.status_monitor;
+        let status_monitor = self.runtime.status_monitor;
         let storage_worker_job =
             tokio::spawn(async move { self.runtime.storage_worker.run().await });
 
-        let status_monitor_job = tokio::spawn(async move {
-            while let Some(status) = status_monitor.recv().await {
-                match status {
-                    TaskStatus::Completed {
-                        task_id: _,
-                        download_id: _,
-                        total_bytes: _,
-                    } => {
-                        break;
+        let status_monitor_job = status_monitor.map(|mut monitor| {
+            tokio::spawn(async move {
+                while let Some(status) = monitor.recv().await {
+                    match status {
+                        TaskStatus::Downloading {
+                            download_id: _,
+                            task_id: _,
+                            downloaded,
+                        } => {
+                            trace!("Downloaded size: {}", downloaded);
+                        }
+                        TaskStatus::Failed {
+                            download_id,
+                            task_id,
+                        } => {
+                            error!("Task {} of download {} failed", task_id, download_id);
+                        }
+                        _ => {}
                     }
-                    TaskStatus::Downloading {
-                        download_id: _,
-                        task_id: _,
-                        downloaded,
-                    } => {
-                        trace!("Downloaded size: {}", downloaded);
-                    }
-                    _ => {}
                 }
-            }
-
-            storage_writer.close().await
+            })
         });
 
         for task in self.runtime.tasks {
@@ -82,8 +89,12 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
         for handle in task_handles {
             handle.await.map_err(SneakydlError::JoinError)??;
         }
-        let _ = storage_worker_job.await.map_err(SneakydlError::JoinError)?;
-        status_monitor_job.await.map_err(SneakydlError::JoinError)?
+
+        storage_writer.close().await?;
+        if let Some(status_monitor_job) = status_monitor_job {
+            status_monitor_job.abort();
+        }
+        storage_worker_job.await.map_err(SneakydlError::JoinError)?
     }
 
     async fn create_runtime(
@@ -101,6 +112,15 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
         let task_metadatas = Self::create_task_metadata(http.clone(), metadata).await?;
 
         for metadata in task_metadatas {
+            status_monitor
+                .sender()
+                .send(TaskStatus::Pending {
+                    download_id: metadata.download_id,
+                    task_id: metadata.task_id,
+                    content_length: metadata.content_length,
+                })
+                .await
+                .map_err(SneakydlError::TaskStatusSendFailed)?;
             let task = Task::new(
                 http.clone(),
                 storage_writer.clone(),
@@ -115,7 +135,8 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
         Ok(DownloadWorkerRuntime {
             tasks,
             storage_worker,
-            status_monitor,
+            storage_monitor: Some(storage_monitor),
+            status_monitor: Some(status_monitor),
             task_controls,
         })
     }
@@ -168,12 +189,15 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
                     .collect()
             }
             _ => {
-                vec![TaskMetadata::new(
-                    metadata.id,
-                    0,
-                    metadata.url.clone(),
-                    metadata.request_metadata.clone(),
-                )]
+                vec![
+                    TaskMetadata::new(
+                        metadata.id,
+                        0,
+                        metadata.url.clone(),
+                        metadata.request_metadata.clone(),
+                    )
+                    .content_length(header.content_length),
+                ]
             }
         };
 

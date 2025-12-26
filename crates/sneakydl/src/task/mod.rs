@@ -2,7 +2,7 @@ pub mod metadata;
 pub mod runtime;
 
 use bytes::Bytes;
-use log::{debug, trace};
+use log::{debug, error, trace};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::StreamExt;
 
@@ -46,6 +46,14 @@ impl<C: HttpClient> Task<C> {
             match self.execute_once().await {
                 Ok(_) => break,
                 Err(e) => {
+                    error!(
+                        "Download [{}] - Task [{}] attempt {}/{} failed: {:?}",
+                        self.metadata.download_id,
+                        self.metadata.task_id,
+                        attempt,
+                        self.metadata.max_retries,
+                        e
+                    );
                     if attempt == self.metadata.max_retries {
                         self.runtime
                             .update_status(TaskStatus::Failed {
@@ -74,7 +82,8 @@ impl<C: HttpClient> Task<C> {
         );
 
         let mut bytes: Vec<Bytes> = vec![];
-        let mut total_bytes_size: u64 = 0;
+        let mut buffet_bytes_size: u64 = 0;
+        let mut last_wirete_bytes_size: u64 = 0;
         let mut stream = pin!(
             self.http
                 .send_request(metadata.url, metadata.request_metadata, metadata.range,)
@@ -96,7 +105,7 @@ impl<C: HttpClient> Task<C> {
                     let item = item.map_err(SneakydlError::RequestError)?;
                     let item_len = item.len() as u64;
 
-                    total_bytes_size += item_len;
+                    buffet_bytes_size += item_len;
                     bytes.push(item);
                     trace!(
                         "Download [{}] - Task [{}] processing chunk of {} bytes",
@@ -106,14 +115,15 @@ impl<C: HttpClient> Task<C> {
                         .add_downloaded(download_id, task_id, item_len)
                         .await?;
 
-                    if total_bytes_size > self.metadata.write_buffer_limit {
+                    if buffet_bytes_size > self.metadata.write_buffer_limit {
                         // write storage
                         storage_notifys.push(
-                            self.create_storage_notify(take(&mut bytes), total_bytes_size)
+                            self.create_storage_notify(take(&mut bytes), last_wirete_bytes_size)
                                 .await?,
                         );
 
-                        total_bytes_size = 0;
+                        last_wirete_bytes_size += buffet_bytes_size;
+                        buffet_bytes_size = 0;
                     }
                 }
                 _ => {
@@ -132,9 +142,9 @@ impl<C: HttpClient> Task<C> {
             }
         }
 
-        if total_bytes_size != 0 {
+        if buffet_bytes_size != 0 {
             storage_notifys.push(
-                self.create_storage_notify(take(&mut bytes), total_bytes_size)
+                self.create_storage_notify(take(&mut bytes), last_wirete_bytes_size)
                     .await?,
             );
         }
@@ -155,18 +165,18 @@ impl<C: HttpClient> Task<C> {
     async fn create_storage_notify(
         &self,
         bytes: Vec<Bytes>,
-        total_bytes_size: u64,
+        offset: u64,
     ) -> Result<JoinHandle<Result<()>>> {
         let storage_notify = StorageNotifier::new(
             self.metadata.task_id,
             self.storage_writer.clone(),
-            self.runtime.downloaded_bytes,
+            offset,
             bytes,
         );
 
         trace!(
             "Download [{}] - Task [{}] sending WriteRequest to StorageWorker ({} bytes)",
-            self.metadata.download_id, self.metadata.task_id, total_bytes_size
+            self.metadata.download_id, self.metadata.task_id, self.runtime.downloaded_bytes
         );
 
         Ok(tokio::spawn(storage_notify.send_wait_done()))

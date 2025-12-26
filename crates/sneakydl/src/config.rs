@@ -1,15 +1,5 @@
 #[derive(Debug)]
 pub struct Config {
-    /// Download a file using N connections. If more
-    /// than N URIs are given, first N URIs are used and
-    /// remaining URLs are used for backup. If less than
-    /// N URIs are given, those URLs are used more than
-    /// once so that N connections total are made
-    /// simultaneously
-    pub split: u32,
-    /// sneakydl does not split less than 2*SIZE byte range.
-    pub min_split_size: u32,
-
     /// N Set maximum number of parallel downloads for
     /// every static HTTP URL
     pub max_concurrent: u32,
@@ -29,12 +19,30 @@ pub enum SplitStrategy {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            split: 5,
-            // 20MB
-            min_split_size: 20 * 1024 * 1024,
             max_concurrent: 5,
             max_connection: 1,
             split_strategy: SplitStrategy::BySize(5 * 1024 * 1024),
         }
+    }
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn max_concurrent(mut self, max: u32) -> Self {
+        self.max_concurrent = max;
+        self
+    }
+
+    pub fn max_connection(mut self, max: u8) -> Self {
+        self.max_connection = max;
+        self
+    }
+
+    pub fn split_strategy(mut self, strategy: SplitStrategy) -> Self {
+        self.split_strategy = strategy;
+        self
     }
 }

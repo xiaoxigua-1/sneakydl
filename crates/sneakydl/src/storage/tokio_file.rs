@@ -1,8 +1,7 @@
-use std::io::IoSlice;
-
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
+use log::trace;
 use tokio::{
     fs::File,
     io::{AsyncSeekExt, AsyncWriteExt},
@@ -30,34 +29,14 @@ impl Storage for TokioStorage {
 
     async fn write_at(&self, dest: &mut Self::Dest, offset: u64, data: Vec<Bytes>) -> Result<()> {
         dest.seek(std::io::SeekFrom::Start(offset)).await?;
-        let iovecs: Vec<IoSlice> = data.iter().map(|b| IoSlice::new(b)).collect();
-        let mut start = 0;
-        let mut offset = 0;
 
-        while start < iovecs.len() {
-            let n = dest
-                .write_vectored(&iovecs[start..])
+        for chunk in data {
+            trace!("Writing {} bytes at offset {}", chunk.len(), offset);
+            dest.write_all(&chunk)
                 .await
-                .context("failed to perform vectored write")?;
-
-            if n == 0 {
-                anyhow::bail!("failed to write any bytes: write returned zero");
-            }
-
-            let mut remaining = n;
-            while remaining > 0 && start < iovecs.len() {
-                let available = iovecs[start].len() - offset;
-
-                if remaining >= available {
-                    remaining -= available;
-                    start += 1;
-                    offset = 0;
-                } else {
-                    offset += remaining;
-                    remaining = 0;
-                }
-            }
+                .context("failed to write chunk")?;
         }
+        trace!("Finished writing at offset {}", offset);
 
         Ok(())
     }

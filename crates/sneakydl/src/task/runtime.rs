@@ -11,6 +11,7 @@ pub enum TaskStatus {
     Pending {
         download_id: Uuid,
         task_id: usize,
+        content_length: Option<u64>,
     },
     Downloading {
         download_id: Uuid,
@@ -69,7 +70,7 @@ impl TaskStatusMonitor {
 }
 
 impl TaskStatusMonitor {
-    pub fn sender(&self) -> Arc<mpsc::Sender<TaskStatus>> {
+    pub(crate) fn sender(&self) -> Arc<mpsc::Sender<TaskStatus>> {
         self.tx.clone()
     }
 
