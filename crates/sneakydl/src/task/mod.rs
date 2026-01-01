@@ -9,7 +9,7 @@ use tokio_stream::StreamExt;
 use std::{mem::take, pin::pin, sync::Arc};
 
 use crate::{
-    net::HttpClient,
+    net::TransferSource,
     result::{Result, SneakydlError},
     storage::{StorageNotifier, StorageWriter},
     task::{
@@ -19,19 +19,19 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Task<C: HttpClient> {
+pub struct Task<C: TransferSource> {
     http: Arc<C>,
     storage_writer: StorageWriter,
-    metadata: TaskMetadata,
+    metadata: TaskMetadata<C::RequestOptions>,
     runtime: TaskRuntime,
 }
 
-impl<C: HttpClient> Task<C> {
+impl<C: TransferSource> Task<C> {
     pub fn new(
         http: Arc<C>,
         storage_writer: StorageWriter,
         status_tx: Arc<mpsc::Sender<TaskStatus>>,
-        metadata: TaskMetadata,
+        metadata: TaskMetadata<C::RequestOptions>,
     ) -> Self {
         Self {
             http,
@@ -86,7 +86,7 @@ impl<C: HttpClient> Task<C> {
         let mut last_wirete_bytes_size: u64 = 0;
         let mut stream = pin!(
             self.http
-                .send_request(metadata.url, metadata.request_metadata, metadata.range,)
+                .download_range(metadata.url, metadata.range, metadata.request_metadata)
                 .await
                 .map_err(SneakydlError::RequestError)?
         );

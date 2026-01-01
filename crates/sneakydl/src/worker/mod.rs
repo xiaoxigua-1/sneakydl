@@ -8,7 +8,7 @@ use tokio::sync::Semaphore;
 
 use crate::{
     config::SplitStrategy,
-    net::HttpClient,
+    net::{ResourceMetadata, TransferSource},
     result::{Result, SneakydlError},
     storage::{Storage, monitor::StorageMonitor, worker::StorageWorker},
     task::{
@@ -19,15 +19,17 @@ use crate::{
     worker::{metadata::DownloadMetadata, runtime::DownloadWorkerRuntime},
 };
 
-pub enum WorkerStatus {}
-
-pub struct DownloadWorker<C: HttpClient, S: Storage> {
-    metadata: DownloadMetadata,
+pub struct DownloadWorker<C: TransferSource, S: Storage> {
+    metadata: DownloadMetadata<C::RequestOptions>,
     runtime: DownloadWorkerRuntime<C, S>,
 }
 
-impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
-    pub async fn new(http: Arc<C>, storage: Arc<S>, metadata: DownloadMetadata) -> Result<Self> {
+impl<C: TransferSource, S: Storage> DownloadWorker<C, S> {
+    pub async fn new(
+        http: Arc<C>,
+        storage: Arc<S>,
+        metadata: DownloadMetadata<C::RequestOptions>,
+    ) -> Result<Self> {
         Ok(Self {
             runtime: Self::create_runtime(http, storage, &metadata).await?,
             metadata,
@@ -44,20 +46,12 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
 
     pub async fn run(self) -> Result<()> {
         let mut task_handles = vec![];
-        let filename = self
-            .metadata
-            .url
-            .path_segments()
-            .map(|p| p.last())
-            .flatten()
-            .unwrap_or("download")
-            .to_string();
 
         let semaphore = Arc::new(Semaphore::new(self.metadata.task_concurrency));
         let storage_writer = self.runtime.storage_worker.storage_writer();
         let status_monitor = self.runtime.status_monitor;
         let storage_worker_job =
-            tokio::spawn(async move { self.runtime.storage_worker.run(filename).await });
+            tokio::spawn(async move { self.runtime.storage_worker.run().await });
 
         let status_monitor_job = status_monitor.map(|mut monitor| {
             tokio::spawn(async move {
@@ -108,16 +102,28 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
     async fn create_runtime(
         http: Arc<C>,
         storage: Arc<S>,
-        metadata: &DownloadMetadata,
+        metadata: &DownloadMetadata<C::RequestOptions>,
     ) -> Result<DownloadWorkerRuntime<C, S>> {
         let mut tasks = vec![];
-        let status_monitor = TaskStatusMonitor::new(100);
         let mut task_controls = vec![];
+        let status_monitor = TaskStatusMonitor::new(100);
+        let resource_metadata = http
+            .get_metadata(&metadata.url)
+            .await
+            .map_err(SneakydlError::RequestError)?;
 
         let storage_monitor = StorageMonitor::default();
-        let storage_worker = StorageWorker::new(storage.clone(), 100, storage_monitor.sender());
+        let storage_worker = StorageWorker::new(
+            storage,
+            resource_metadata
+                .filename
+                .clone()
+                .unwrap_or(format!("download_{}", metadata.id)),
+            100,
+            storage_monitor.sender(),
+        );
         let storage_writer = storage_worker.storage_writer();
-        let task_metadatas = Self::create_task_metadata(http.clone(), metadata).await?;
+        let task_metadatas = Self::create_task_metadata(resource_metadata, metadata).await?;
 
         for metadata in task_metadatas {
             status_monitor
@@ -150,52 +156,45 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
     }
 
     async fn create_task_metadata(
-        http: Arc<C>,
-        metadata: &DownloadMetadata,
-    ) -> Result<Vec<TaskMetadata>> {
-        let header = http
-            .head(&metadata.url)
-            .await
-            .map_err(SneakydlError::RequestError)?;
-        let can_split = header.content_length.is_some() && header.accept_ranges;
+        resource_metadata: ResourceMetadata,
+        metadata: &DownloadMetadata<C::RequestOptions>,
+    ) -> Result<Vec<TaskMetadata<C::RequestOptions>>> {
+        let can_split =
+            resource_metadata.content_length.is_some() && resource_metadata.support_range;
+        let total_size = resource_metadata.content_length;
 
         let task_metadatas = match metadata.split_strategy {
-            SplitStrategy::BySize(chunk_size) if can_split => {
-                let total_size = header.content_length.unwrap();
-                (0..total_size)
-                    .step_by(chunk_size)
-                    .enumerate()
-                    .map(|(index, start)| {
-                        let end = (start + chunk_size as u64).min(total_size);
+            SplitStrategy::BySize(chunk_size) if can_split => (0..total_size.unwrap())
+                .step_by(chunk_size)
+                .enumerate()
+                .map(|(index, start)| {
+                    let end = (start + chunk_size as u64).min(total_size.unwrap());
 
-                        TaskMetadata::new(
-                            metadata.id,
-                            index,
-                            metadata.url.clone(),
-                            metadata.request_metadata.clone(),
-                        )
-                        .range(start..end)
-                    })
-                    .collect()
-            }
-            SplitStrategy::ByCount(count) if can_split => {
-                let total_size = header.content_length.unwrap();
-                (0..count)
-                    .enumerate()
-                    .map(|(index, i)| {
-                        let start = total_size * i as u64 / count as u64;
-                        let end = total_size * (i + 1) as u64 / count as u64;
+                    TaskMetadata::new(
+                        metadata.id,
+                        index,
+                        metadata.url.clone(),
+                        metadata.request_metadata.clone(),
+                    )
+                    .range(start..end)
+                })
+                .collect(),
+            SplitStrategy::ByCount(count) if can_split => (0..count)
+                .enumerate()
+                .map(|(index, i)| {
+                    let total_size = total_size.unwrap();
+                    let start = total_size * i as u64 / count as u64;
+                    let end = total_size * (i + 1) as u64 / count as u64;
 
-                        TaskMetadata::new(
-                            metadata.id,
-                            index,
-                            metadata.url.clone(),
-                            metadata.request_metadata.clone(),
-                        )
-                        .range(start..end)
-                    })
-                    .collect()
-            }
+                    TaskMetadata::new(
+                        metadata.id,
+                        index,
+                        metadata.url.clone(),
+                        metadata.request_metadata.clone(),
+                    )
+                    .range(start..end)
+                })
+                .collect(),
             _ => {
                 vec![
                     TaskMetadata::new(
@@ -204,7 +203,7 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
                         metadata.url.clone(),
                         metadata.request_metadata.clone(),
                     )
-                    .content_length(header.content_length),
+                    .content_length(resource_metadata.content_length),
                 ]
             }
         };

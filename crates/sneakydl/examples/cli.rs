@@ -1,8 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use sneakydl::{
     config::{Config, SplitStrategy},
-    net::{RequestMetadata, RequestMethod, reqwest_client::ReqwestClient},
+    net::reqwest_client::ReqwestClient,
     storage::tokio_file::TokioStorage,
     task::runtime::TaskStatus,
     worker::{DownloadWorker, metadata::DownloadMetadata},
@@ -31,12 +31,7 @@ async fn main() {
     let reqwest_client = ReqwestClient::new(reqwest::Client::new());
 
     let tokio_file = TokioStorage::new(cli.output.unwrap_or(PathBuf::from(".")));
-    let download_worker_metadata = DownloadMetadata::new(
-        Uuid::default(),
-        cli.url,
-        RequestMetadata::new(RequestMethod::GET, HashMap::new()),
-        config,
-    );
+    let download_worker_metadata = DownloadMetadata::new(Uuid::default(), cli.url, None, config);
     let mut worker = DownloadWorker::new(
         Arc::new(reqwest_client),
         Arc::new(tokio_file),

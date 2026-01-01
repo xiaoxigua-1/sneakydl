@@ -3,14 +3,12 @@ use uuid::Uuid;
 
 use std::ops::Range;
 
-use crate::net::RequestMetadata;
-
 #[derive(Debug, Clone)]
-pub struct TaskMetadata {
+pub struct TaskMetadata<T> {
     pub task_id: usize,
     pub download_id: Uuid,
     pub url: Url,
-    pub request_metadata: RequestMetadata,
+    pub request_metadata: Option<T>,
     /// half-open byte range [start, end). end == start => unknown/streaming
     pub(crate) content_length: Option<u64>,
     pub(crate) range: Option<Range<u64>>,
@@ -18,13 +16,8 @@ pub struct TaskMetadata {
     pub(crate) write_buffer_limit: u64,
 }
 
-impl TaskMetadata {
-    pub fn new(
-        download_id: Uuid,
-        task_id: usize,
-        url: Url,
-        request_metadata: RequestMetadata,
-    ) -> Self {
+impl<T> TaskMetadata<T> {
+    pub fn new(download_id: Uuid, task_id: usize, url: Url, request_metadata: Option<T>) -> Self {
         Self {
             download_id,
             task_id,

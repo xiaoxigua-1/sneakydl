@@ -1,108 +1,101 @@
 #[cfg(feature = "reqwest-client")]
 pub mod reqwest_client;
 
-use std::{collections::HashMap, ops::Range};
+use std::{fmt::Debug, ops::Range};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::Stream;
-use strum_macros::Display;
 use url::Url;
 
-/// Represents the response of an HTTP `HEAD` request.
+/// Metadata information about a downloadable resource.
 ///
-/// Usually used to fetch metadata of a resource before actual download,
-/// such as file size or whether the server supports Range requests.
+/// This struct contains information retrieved from a remote resource
+/// that helps determine how to transfer it efficiently.
 #[derive(Debug, Clone)]
-pub struct HeadResponse {
-    /// Indicates whether the server supports `Range` requests.
-    /// If true, partial downloads are possible.
-    pub accept_ranges: bool,
+pub struct ResourceMetadata {
+    /// Whether the server supports HTTP range requests.
+    ///
+    /// If true, the resource can be downloaded in multiple partial requests,
+    /// enabling features like resumable downloads and parallel transfers.
+    pub support_range: bool,
 
-    /// Total length of the content in bytes.
-    /// `None` if the server did not provide `Content-Length`.
+    /// The total size of the resource in bytes, if available.
+    ///
+    /// This is typically obtained from the "Content-Length" HTTP header.
+    /// None indicates that the size is unknown or not provided by the server.
     pub content_length: Option<u64>,
+
+    /// The suggested filename for the resource, if available.
+    ///
+    /// This is typically obtained from the "Content-Disposition" HTTP header.
+    /// Can be used as a default filename when saving the downloaded resource.
+    pub filename: Option<String>,
 }
 
-#[derive(Debug, Clone, Display)]
-pub enum RequestMethod {
-    GET,
-    HEAD,
-    POST,
-    PUT,
-    DELETE,
-    CONNECT,
-    OPTIONS,
-    TRACE,
-    PATCH,
-}
-
-/// Metadata for an HTTP request.
+/// A trait for handling resource downloads and metadata retrieval.
 ///
-/// Describes the HTTP method and custom headers.
-#[derive(Debug, Clone)]
-pub struct RequestMetadata {
-    /// HTTP method (e.g., `"GET"`, `"POST"`, `"HEAD"`).
-    pub method: RequestMethod,
-
-    /// Request headers as a key-value map.
-    /// Example: `("User-Agent", "MyDownloader")`.
-    pub headers: HashMap<String, String>,
-}
-
-impl RequestMetadata {
-    /// Creates a new [`RequestMetadata`].
-    ///
-    /// # Parameters
-    /// - `method`: The HTTP method string (e.g., `"GET"`).
-    /// - `headers`: A map of headers for the request.
-    ///
-    /// # Example
-    /// ```
-    /// use sneakydl::net::{RequestMetadata, RequestMethod};
-    /// use std::collections::HashMap;
-    ///
-    /// let metadata = RequestMetadata::new(RequestMethod::GET, HashMap::new());
-    /// ```
-    pub fn new(method: RequestMethod, headers: HashMap<String, String>) -> Self {
-        Self { method, headers }
-    }
-}
-
-/// HTTP client abstraction.
+/// This trait defines the interface for downloading resources from various sources
+/// (e.g., HTTP, FTP, S3) with support for range requests and custom options.
 ///
-/// Defines a set of common HTTP behaviors, allowing different concrete implementations
-/// (e.g., `reqwest`, `hyper`). Useful for async downloaders, API clients, etc.
+/// # Associated Types
+///
+/// - `Iter`: A stream that yields chunks of bytes representing the downloaded data
+/// - `RequestOptions`: Configuration options specific to the transfer implementation
 #[async_trait]
-pub trait HttpClient: Send + Sync + 'static {
-    /// Type of the returned data stream.
+pub trait TransferSource: Send + Sync + 'static {
+    /// A stream type that yields chunks of the downloaded resource.
     ///
-    /// Typically a `Stream` that produces chunks of [`Bytes`] asynchronously.
-    /// Example: `impl Stream<Item = anyhow::Result<Bytes>>`
+    /// Each item is a Result containing either a Bytes chunk or an error.
+    /// The stream is required to be Send and compatible with async/await.
     type Iter: Stream<Item = anyhow::Result<Bytes>> + Send;
 
-    /// Sends an HTTP `HEAD` request to retrieve metadata about the target resource.
+    /// Configuration options for customizing resource download requests.
     ///
-    /// # Parameters
-    /// - `url`: The URL to send the request to.
-    ///
-    /// # Returns
-    /// - [`HeadResponse`] containing content length and range support info.
-    async fn head(&self, url: &Url) -> anyhow::Result<HeadResponse>;
+    /// Must be Clone, Debug, Send, and Sync to work across async boundaries.
+    type RequestOptions: Clone + Debug + Send + Sync + 'static;
 
-    /// Sends an HTTP request and returns a stream for reading the response data incrementally.
+    /// Retrieves metadata information about a remote resource.
     ///
-    /// # Parameters
-    /// - `url`: Target URL to download or request.
-    /// - `metadata`: HTTP method and headers for the request.
-    /// - `range`: Optional byte range for partial downloads.
+    /// # Arguments
+    ///
+    /// * `url` - The URL of the resource to query
     ///
     /// # Returns
-    /// - A `Stream` producing [`Bytes`] chunks of the response.
-    async fn send_request(
+    ///
+    /// A Result containing the resource's metadata, or an error if the metadata
+    /// cannot be retrieved (e.g., network failure, invalid URL, server error).
+    async fn get_metadata(&self, url: &Url) -> anyhow::Result<ResourceMetadata>;
+
+    /// Downloads a resource, optionally specifying a byte range.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL of the resource to download
+    /// * `range` - Optional byte range to download (e.g., bytes 0-99).
+    ///            If None, the entire resource is downloaded.
+    ///            Only works if the server supports range requests.
+    /// * `options` - Optional transfer-specific configuration options.
+    ///              If None, default options are used.
+    ///
+    /// # Returns
+    ///
+    /// A Result containing a stream that yields data chunks, or an error if the
+    /// download cannot be initiated (e.g., invalid URL, server error, range not supported).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let iter = source.download_range(
+    ///     Url::parse("https://example.com/file.bin")?,
+    ///     Some(0..1024),  // Download first 1KB
+    ///     None,
+    /// ).await?;
+    /// ```
+    async fn download_range(
         &self,
         url: Url,
-        metadata: RequestMetadata,
         range: Option<Range<u64>>,
+        options: Option<Self::RequestOptions>,
     ) -> anyhow::Result<Self::Iter>;
 }

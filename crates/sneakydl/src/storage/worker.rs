@@ -10,6 +10,7 @@ use crate::{
 #[derive(Debug)]
 pub struct StorageWorker<T: Storage> {
     storage: Arc<T>,
+    filename: String,
     request_rx: mpsc::Receiver<Option<StorageWriteRequest>>,
     request_tx: Arc<mpsc::Sender<Option<StorageWriteRequest>>>,
     status_monitor_tx: Arc<watch::Sender<StorageStatus>>,
@@ -18,6 +19,7 @@ pub struct StorageWorker<T: Storage> {
 impl<T: Storage> StorageWorker<T> {
     pub fn new(
         storage: Arc<T>,
+        filename: String,
         request_buff: usize,
         status_monitor_tx: Arc<watch::Sender<StorageStatus>>,
     ) -> Self {
@@ -25,13 +27,15 @@ impl<T: Storage> StorageWorker<T> {
 
         Self {
             storage,
+            filename,
             request_tx: Arc::new(request_tx),
             request_rx,
             status_monitor_tx,
         }
     }
 
-    pub async fn run(mut self, filename: String) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
+        let filename = self.filename.clone();
         let mut dest = self
             .storage
             .create_dest(filename)
