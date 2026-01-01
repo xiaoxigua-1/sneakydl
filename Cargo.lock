@@ -1251,6 +1251,7 @@ dependencies = [
  "strum_macros",
  "tokio",
  "tokio-stream",
+ "url",
  "uuid",
 ]
 

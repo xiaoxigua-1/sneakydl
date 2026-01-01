@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -10,11 +12,11 @@ use tokio::{
 use super::Storage;
 
 pub struct TokioStorage {
-    path: &'static str,
+    path: PathBuf,
 }
 
 impl TokioStorage {
-    pub fn new(path: &'static str) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
 }
@@ -23,8 +25,10 @@ impl TokioStorage {
 impl Storage for TokioStorage {
     type Dest = File;
 
-    async fn create_dest(&self) -> Result<Self::Dest> {
-        File::create(self.path).await.map_err(anyhow::Error::from)
+    async fn create_dest(&self, filename: String) -> Result<Self::Dest> {
+        File::create(self.path.join(filename))
+            .await
+            .map_err(anyhow::Error::from)
     }
 
     async fn write_at(&self, dest: &mut Self::Dest, offset: u64, data: Vec<Bytes>) -> Result<()> {

@@ -8,6 +8,7 @@ use reqwest::{
     header::{ACCEPT_RANGES, CONTENT_LENGTH, RANGE},
 };
 use tokio_stream::StreamExt;
+use url::Url;
 
 use crate::net::{HttpClient, RequestMetadata};
 
@@ -33,8 +34,8 @@ impl Default for ReqwestClient {
 impl HttpClient for ReqwestClient {
     type Iter = BoxStream<'static, anyhow::Result<Bytes>>;
 
-    async fn head(&self, url: &str) -> anyhow::Result<super::HeadResponse> {
-        let response = self.client.head(url).send().await?;
+    async fn head(&self, url: &Url) -> anyhow::Result<super::HeadResponse> {
+        let response = self.client.head(url.clone()).send().await?;
         let headers = response.headers();
 
         Ok(super::HeadResponse {
@@ -51,7 +52,7 @@ impl HttpClient for ReqwestClient {
 
     async fn send_request(
         &self,
-        url: String,
+        url: Url,
         metadata: RequestMetadata,
         range: Option<std::ops::Range<u64>>,
     ) -> anyhow::Result<Self::Iter> {

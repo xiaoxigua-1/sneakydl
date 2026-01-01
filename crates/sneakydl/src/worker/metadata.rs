@@ -1,3 +1,4 @@
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -7,14 +8,14 @@ use crate::{
 
 pub struct DownloadMetadata {
     pub(crate) id: Uuid,
-    pub(crate) url: String,
+    pub(crate) url: Url,
     pub(crate) request_metadata: RequestMetadata,
     pub(crate) split_strategy: SplitStrategy,
     pub(crate) task_concurrency: usize,
 }
 
 impl DownloadMetadata {
-    pub fn new(id: Uuid, url: String, request_metadata: RequestMetadata, config: Config) -> Self {
+    pub fn new(id: Uuid, url: Url, request_metadata: RequestMetadata, config: Config) -> Self {
         Self {
             id,
             url,

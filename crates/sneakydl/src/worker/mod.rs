@@ -44,12 +44,20 @@ impl<C: HttpClient, S: Storage> DownloadWorker<C, S> {
 
     pub async fn run(self) -> Result<()> {
         let mut task_handles = vec![];
+        let filename = self
+            .metadata
+            .url
+            .path_segments()
+            .map(|p| p.last())
+            .flatten()
+            .unwrap_or("download")
+            .to_string();
 
         let semaphore = Arc::new(Semaphore::new(self.metadata.task_concurrency));
         let storage_writer = self.runtime.storage_worker.storage_writer();
         let status_monitor = self.runtime.status_monitor;
         let storage_worker_job =
-            tokio::spawn(async move { self.runtime.storage_worker.run().await });
+            tokio::spawn(async move { self.runtime.storage_worker.run(filename).await });
 
         let status_monitor_job = status_monitor.map(|mut monitor| {
             tokio::spawn(async move {

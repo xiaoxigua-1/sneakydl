@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use sneakydl::{
     config::{Config, SplitStrategy},
@@ -10,24 +10,27 @@ use sneakydl::{
 
 use clap::Parser;
 use indicatif::ProgressBar;
+use url::Url;
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    url: String,
+    url: Url,
+
+    #[arg(short, long)]
+    output: Option<PathBuf>,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     env_logger::init();
+
     let cli = Args::parse();
-    let mut config = Config::default();
+    let config = Config::new().split_strategy(SplitStrategy::Single);
     let reqwest_client = ReqwestClient::new(reqwest::Client::new());
-    let tokio_file = TokioStorage::new("./(MMA)-100MB.zip");
 
-    config.split_strategy = SplitStrategy::Single;
-
+    let tokio_file = TokioStorage::new(cli.output.unwrap_or(PathBuf::from(".")));
     let download_worker_metadata = DownloadMetadata::new(
         Uuid::default(),
         cli.url,

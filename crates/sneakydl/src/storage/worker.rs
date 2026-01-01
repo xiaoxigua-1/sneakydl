@@ -31,10 +31,10 @@ impl<T: Storage> StorageWorker<T> {
         }
     }
 
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(mut self, filename: String) -> Result<()> {
         let mut dest = self
             .storage
-            .create_dest()
+            .create_dest(filename)
             .await
             .map_err(SneakydlError::IoError)?;
 

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::Stream;
 use strum_macros::Display;
+use url::Url;
 
 /// Represents the response of an HTTP `HEAD` request.
 ///
@@ -87,7 +88,7 @@ pub trait HttpClient: Send + Sync + 'static {
     ///
     /// # Returns
     /// - [`HeadResponse`] containing content length and range support info.
-    async fn head(&self, url: &str) -> anyhow::Result<HeadResponse>;
+    async fn head(&self, url: &Url) -> anyhow::Result<HeadResponse>;
 
     /// Sends an HTTP request and returns a stream for reading the response data incrementally.
     ///
@@ -100,7 +101,7 @@ pub trait HttpClient: Send + Sync + 'static {
     /// - A `Stream` producing [`Bytes`] chunks of the response.
     async fn send_request(
         &self,
-        url: String,
+        url: Url,
         metadata: RequestMetadata,
         range: Option<Range<u64>>,
     ) -> anyhow::Result<Self::Iter>;

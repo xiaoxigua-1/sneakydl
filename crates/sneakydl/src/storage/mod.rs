@@ -15,7 +15,7 @@ use crate::result::{Result, SneakydlError};
 pub trait Storage: Send + Sync + 'static {
     type Dest: Send;
 
-    async fn create_dest(&self) -> anyhow::Result<Self::Dest>;
+    async fn create_dest(&self, filename: String) -> anyhow::Result<Self::Dest>;
 
     async fn write_at(
         &self,
